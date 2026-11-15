@@ -11,10 +11,19 @@
    "filterable": 1
   },
   {
-   "key": "py_1234视频采",
-   "name": "1234视频[采]",
+   "key": "py_官解",
+   "name": "官解.py",
    "type": 3,
-   "api": "./1234视频[采].py",
+   "api": "./官解.py",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 1
+  },
+  {
+   "key": "py_4kmp",
+   "name": "4kmp.py",
+   "type": 3,
+   "api": "./4kmp.py",
    "searchable": 1,
    "quickSearch": 1,
    "filterable": 1
