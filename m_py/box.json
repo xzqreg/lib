@@ -2,6 +2,31 @@
 {
  "sites": [
   {
+   "key": "py_douban",
+   "name": "豆瓣[py]",
+   "type": 3,
+   "api": "./py/douban.py",
+   "changeable": 0,
+   "searchable": 0,
+   "filterable": 0
+  },
+  {
+   "key": "py_yangshipin",
+   "name": "直播[py]",
+   "type": 3,
+   "api": "./py/yangshipin.py"
+  },
+  {
+   "key": "py_guazi",
+   "name": "瓜子[py]",
+   "type": 3,
+   "api": "./py/guazi.py",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 1,
+   "ext": {}
+  },
+  {
    "key": "py_SA视频采",
    "name": "SA视频[采]",
    "type": 3,
