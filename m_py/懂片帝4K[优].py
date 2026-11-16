@@ -8,9 +8,11 @@
   lang: 'hipy',
 })
 dongpian1.com TVBox Spider
-- 签名: HMAC-SHA256, KEY 从 movie-card-runtime-DSGpZH3f.js 提取
+- 签名: HMAC-SHA256
+- 支持匿名游客登录（解决官方线路解析失败）
 - 详情页真实线路名，4K 排第一
 - 官方/4K 直连，普通线路白名单过滤 + HLS 代理清洗
+- 播放 id 携带 token，电影单集无 number 也能正常播放
 """
 import re
 import json
@@ -33,7 +35,6 @@ except ImportError:
     class BaseSpider:
         def init(self, extend=""): pass
         def getName(self): return "mock"
-
 
 # ==================== HLS 清洗 ====================
 def clean_m3u8(text, ad_keywords, min_duration=0.5):
@@ -329,16 +330,8 @@ class Spider(BaseSpider):
 
     ENABLE_HLS_CLEAN = True
 
-    # ★ 普通线路白名单：只保留以下 7 条
-    # 支持 provider_id 和中文 label 两种匹配
     PLAIN_WHITELIST_IDS = {
-        "yyzy1080",   # 1080zyk
-        "mdzy",       # 魔都资源
-        "ikun",       # ikun资源
-        "wsyzy",      # 无水印资源
-        "zuida",      # 最大资源
-        "liangzi",    # 量子资源
-        "niuniu",     # 牛牛资源
+        "yyzy1080", "mdzy", "ikun", "wsyzy", "zuida", "liangzi", "niuniu",
     }
     PLAIN_WHITELIST_NAMES = {
         "1080zyk", "魔都资源", "ikun资源", "无水印资源",
@@ -358,6 +351,10 @@ class Spider(BaseSpider):
     }
 
     def init(self, extend=""):
+        self.session = requests.Session()
+        self.session.headers.update(self.PLAY_HEADERS)
+        self._logged_in = False
+        
         self.proxy_config = {
             "ad_keywords": [
                 "advert", "preroll", "片头", "广告",
@@ -372,16 +369,45 @@ class Spider(BaseSpider):
     def destroy(self):
         try:
             HLSProxyServer.stop()
+            self.session.close()
         except Exception:
             pass
 
-    # ========== 签名 ==========
+    # ========== 核心修复：匿名登录机制 ==========
+    def _anonymous_login(self):
+        """官方线路必需：获取游客 Session"""
+        try:
+            path = "/v1/users/anonymous"
+            query = ""
+            headers = self._sign("POST", path, query)
+            headers["Content-Type"] = "application/json"
+            anon_id = f"web_{uuid.uuid4()}"
+            resp = self.session.post(self.host + path + query, headers=headers,
+                                     json={"anonymous_id": anon_id}, timeout=10)
+            if resp.status_code in (200, 201):
+                self._logged_in = True
+                return True
+            print(f"[Login] 匿名登录失败: {resp.status_code}")
+        except Exception as e:
+            print(f"[Login] 匿名登录异常: {e}")
+        return False
+
+    def _ensure_login(self):
+        if not self._logged_in:
+            return self._anonymous_login()
+        return True
+
+    # ========== 签名 & 请求 ==========
     def _sign(self, method, api, search_or_data=""):
         ts = str(int(time.time() * 1000))
         n = secrets.token_hex(16)
         msg = f"{method.upper()}\n{api}{search_or_data}\n{ts}\n{n}"
         sig = hmac.new(self.SIGN_KEY.encode(), msg.encode(), hashlib.sha256).hexdigest()
         return {
+            "x-ai-movie-client-name": "movie-search-frontend",
+            "x-ai-movie-client-version": "1.0.0",
+            "x-ai-movie-build-version": "dongpiandi-v2026.10.04.1-episode-resume-efd9a7f2e87e-web",
+            "x-ai-movie-protocol-version": "2026-07-05.library-v2.playback-v1",
             "x-ai-movie-timestamp": ts,
             "x-ai-movie-nonce": n,
             "x-ai-movie-signature": sig,
@@ -394,7 +420,7 @@ class Spider(BaseSpider):
         headers = self._sign("GET", path, query_string)
         url = self.host + path + query_string
         try:
-            r = requests.get(url, headers=headers, timeout=15)
+            r = self.session.get(url, headers=headers, timeout=15)
         except Exception as e:
             print(f"[{tag}] GET {path} -> EXC {e}")
             return None
@@ -407,18 +433,24 @@ class Spider(BaseSpider):
             print(f"[{tag}] GET {path} -> 非 JSON")
             return None
 
-    def _post_json(self, path, query_string, body_dict, tag=""):
+    def _post_json(self, path, query_string, body_dict, tag="", retry_login=False):
         body_str = json.dumps(body_dict, ensure_ascii=False, separators=(",", ":"))
         headers = self._sign("POST", path, query_string)
         headers["Content-Type"] = "application/json"
         url = self.host + path + query_string
         try:
-            r = requests.post(url, headers=headers,
+            r = self.session.post(url, headers=headers,
                               data=body_str.encode("utf-8"), timeout=15)
         except Exception as e:
             print(f"[{tag}] POST {path} -> EXC {e}")
             return None
+        
         if r.status_code not in (200, 201):
+            # 捕获会话过期/需要登录的特定错误码
+            if not retry_login and ("session_required" in r.text or "unauthorized" in r.text or r.status_code == 401):
+                print(f"[{tag}] 检测到需要登录，尝试重试...")
+                if self._ensure_login():
+                    return self._post_json(path, query_string, body_dict, tag, retry_login=True)
             print(f"[{tag}] POST {path} -> {r.status_code}: {r.text[:150]}")
             return None
         try:
@@ -430,19 +462,15 @@ class Spider(BaseSpider):
     @staticmethod
     def _sort_options():
         return [
-            {"n": "热度", "v": "trending"},
-            {"n": "最近更新", "v": "new"},
-            {"n": "评分", "v": "score"},
-            {"n": "上映时间", "v": "time"},
+            {"n": "热度", "v": "trending"}, {"n": "最近更新", "v": "new"},
+            {"n": "评分", "v": "score"}, {"n": "上映时间", "v": "time"},
         ]
 
     @staticmethod
     def _window_options():
         return [
-            {"n": "日榜", "v": "day"},
-            {"n": "周榜", "v": "week"},
-            {"n": "月榜", "v": "month"},
-            {"n": "全部", "v": "all"},
+            {"n": "日榜", "v": "day"}, {"n": "周榜", "v": "week"},
+            {"n": "月榜", "v": "month"}, {"n": "全部", "v": "all"},
         ]
 
     def _build_filter_objects(self, tid):
@@ -452,18 +480,13 @@ class Spider(BaseSpider):
         ]
 
     def _build_filters_dict(self, tid):
-        return {
-            "sort": self._sort_options(),
-            "window": self._window_options(),
-        }
+        return {"sort": self._sort_options(), "window": self._window_options()}
 
     # ========== 首页 ==========
     def homeContent(self, filter=False):
         classes = [
-            {"type_id": "movie", "type_name": "电影"},
-            {"type_id": "series", "type_name": "电视剧"},
-            {"type_id": "anime", "type_name": "动漫"},
-            {"type_id": "variety", "type_name": "综艺"},
+            {"type_id": "movie", "type_name": "电影"}, {"type_id": "series", "type_name": "电视剧"},
+            {"type_id": "anime", "type_name": "动漫"}, {"type_id": "variety", "type_name": "综艺"},
             {"type_id": "short", "type_name": "短剧"},
         ]
         filters = {c["type_id"]: self._build_filter_objects(c["type_id"]) for c in classes}
@@ -471,8 +494,7 @@ class Spider(BaseSpider):
 
     def homeVideoContent(self):
         data = self._get_json("/v1/feed/home", {
-            "scope": "public", "mode": "preview",
-            "sections": 3, "cards": 10,
+            "scope": "public", "mode": "preview", "sections": 3, "cards": 10,
         }, tag="homeVideoContent")
         if not data:
             return {"list": []}
@@ -495,12 +517,10 @@ class Spider(BaseSpider):
         window = str(ext.get("window") or "day")
 
         data = self._get_json("/v1/browse/catalog", {
-            "sort": sort, "window": window,
-            "page": pg_num, "limit": 20, "kind": kind,
+            "sort": sort, "window": window, "page": pg_num, "limit": 20, "kind": kind,
         }, tag="categoryContent")
         if not data:
-            return {"list": [], "page": pg_num, "pagecount": 1,
-                    "limit": 20, "total": 0,
+            return {"list": [], "page": pg_num, "pagecount": 1, "limit": 20, "total": 0,
                     "filters": self._build_filters_dict(tid)}
 
         videos = [self._card_to_vod(c) for c in data.get("cards", [])]
@@ -510,8 +530,7 @@ class Spider(BaseSpider):
 
         return {
             "list": videos, "page": pg_num, "pagecount": pagecount,
-            "limit": 20, "total": pagecount * 20,
-            "filters": self._build_filters_dict(tid),
+            "limit": 20, "total": pagecount * 20, "filters": self._build_filters_dict(tid),
         }
 
     # ========== 搜索 ==========
@@ -522,31 +541,26 @@ class Spider(BaseSpider):
         thread_body = {
             "title": key,
             "metadata": {
-                "search_fields": "all",
-                "search_scope_label": "综合",
-                "search_mode": "fast",
-                "source": "movie_composer_route",
+                "search_fields": "all", "search_scope_label": "综合",
+                "search_mode": "fast", "source": "movie_composer_route",
                 "submission_id": str(uuid.uuid4()),
             }
         }
-        thread = self._post_json("/v1/threads", "", thread_body,
-                                 tag="searchContent/thread")
+        thread = self._post_json("/v1/threads", "", thread_body, tag="searchContent/thread")
         thread_id = (thread or {}).get("id", "")
         if not thread_id:
             return {"list": []}
 
-        time.sleep(1.5)
+        time.sleep(1.2)
 
         try:
             pg_num = int(pg or 1)
         except Exception:
             pg_num = 1
+            
         data = self._get_json("/v1/browse/catalog", {
-            "page": pg_num, "limit": 20,
-            "query_mode": "fast_v3",
-            "thread_id": thread_id,
-            "search_fields": "all",
-            "q": quote(key),
+            "page": pg_num, "limit": 20, "query_mode": "fast_v3",
+            "thread_id": thread_id, "search_fields": "all", "q": quote(key),
         }, tag="searchContent/query")
         if not data:
             return {"list": []}
@@ -555,7 +569,7 @@ class Spider(BaseSpider):
         videos = [self._card_to_vod(c) for c in raw]
         return {"list": videos, "page": pg_num}
 
-    # ========== 详情：白名单过滤普通线路，4K 排第一 ==========
+    # ========== 详情：白名单过滤，4K 排第一 ==========
     def detailContent(self, ids=None):
         ids = self._safe_list(ids)
         if not ids:
@@ -573,33 +587,29 @@ class Spider(BaseSpider):
         first_token = episodes[0].get("token", "")
         lines = []
         if first_token:
-            resolve_data = self._get_json(
-                f"/v1/playback/resolve/{first_token}",
-                tag="detailContent/resolve",
-            )
+            resolve_data = self._get_json(f"/v1/playback/resolve/{first_token}", tag="detailContent/resolve")
             if resolve_data:
                 lines = resolve_data.get("line_options") or []
 
-        # ★ 白名单过滤：官方/4K 全留，普通线路只留指定的 7 条
         filtered = []
         for opt in lines:
             kind = opt.get("url_kind") or ""
             label = opt.get("label") or opt.get("provider_name") or ""
             pid = opt.get("provider_id") or ""
 
-            # 官方/4K（resolve_ticket 或名称带官方/4K）→ 全保留
             if kind == "resolve_ticket" or "官方" in label or "4K" in label or "4k" in label:
                 filtered.append(opt)
                 continue
 
-            # 普通线路（m3u8 直链）→ 检查白名单
             if kind == "m3u8" or opt.get("url", "").startswith("http"):
                 if pid in self.PLAIN_WHITELIST_IDS or label in self.PLAIN_WHITELIST_NAMES:
                     filtered.append(opt)
 
+        if not filtered:
+            filtered = lines
+
         lines = filtered
 
-        # 排序：4K → 官方 → 普通（按 preference_weight 降序）
         def _priority(opt):
             label = opt.get("label") or opt.get("provider_name") or ""
             is_4k = "4K" in label or "4k" in label
@@ -624,17 +634,20 @@ class Spider(BaseSpider):
 
             ep_strs = []
             for ep in episodes:
+                token = ep.get("token") or ""
                 ep_num = ep.get("number", 0)
                 ep_title = ep.get("title") or f"第{ep_num}集"
-                ep_strs.append(f"{ep_title}${vod_id}|{line_id}|{ep_num}")
+                # 播放 id 格式：vod_id|line_id|token
+                ep_strs.append(f"{ep_title}${vod_id}|{line_id}|{token}")
             play_url_list.append("#".join(ep_strs))
 
         if not play_from_list:
             ep_strs = []
             for ep in episodes:
+                token = ep.get("token") or ""
                 ep_num = ep.get("number", 0)
                 ep_title = ep.get("title") or f"第{ep_num}集"
-                ep_strs.append(f"{ep_title}${vod_id}||{ep_num}")
+                ep_strs.append(f"{ep_title}${vod_id}||{token}")
             play_from_list = ["默认线路"]
             play_url_list = ["#".join(ep_strs)]
 
@@ -659,39 +672,43 @@ class Spider(BaseSpider):
         parts = id.split("|")
         if len(parts) != 3:
             return {"parse": 1, "url": "", "msg": "id 格式错误"}
-        vod_id, line_id, ep_num = parts
+        vod_id, line_id, token = parts
 
-        detail = self._get_json(f"/v1/catalog/{vod_id}", tag="playerContent/detail")
-        if not detail:
-            return {"parse": 1, "url": "", "msg": "详情加载失败"}
-        target_token = None
-        for ep in detail.get("episodes") or []:
-            if str(ep.get("number")) == str(ep_num):
-                target_token = ep.get("token")
-                break
-        if not target_token:
-            return {"parse": 1, "url": "", "msg": f"找不到第{ep_num}集"}
+        # 兼容旧版本：第三段是纯数字，视为集号去回查
+        if token.isdigit():
+            detail = self._get_json(f"/v1/catalog/{vod_id}", tag="playerContent/legacy")
+            episodes = (detail or {}).get("episodes") or []
+            idx = int(token) - 1
+            if 0 <= idx < len(episodes):
+                token = episodes[idx].get("token") or ""
+            else:
+                token = ""
 
-        resolve = self._get_json(f"/v1/playback/resolve/{target_token}",
-                                 tag="playerContent/resolve")
+        if not token:
+            return {"parse": 1, "url": "", "msg": "缺少剧集 token"}
+
+        resolve = self._get_json(f"/v1/playback/resolve/{token}", tag="playerContent/resolve")
         if not resolve:
             return {"parse": 1, "url": "", "msg": "resolve 失败"}
         lines = resolve.get("line_options") or []
+        if not lines:
+            return {"parse": 1, "url": "", "msg": "无可用线路"}
 
         target_line = None
-        for opt in lines:
-            oid = opt.get("playback_source_id") or opt.get("id") or ""
-            if oid == line_id:
-                target_line = opt
-                break
-        if not target_line:
+        if line_id:
             for opt in lines:
-                name = opt.get("label") or opt.get("provider_name") or ""
-                if name == line_id:
+                oid = opt.get("playback_source_id") or opt.get("id") or ""
+                if oid == line_id:
                     target_line = opt
                     break
+            if not target_line:
+                for opt in lines:
+                    name = opt.get("label") or opt.get("provider_name") or ""
+                    if name == line_id:
+                        target_line = opt
+                        break
         if not target_line:
-            return {"parse": 1, "url": "", "msg": f"线路 {line_id} 不存在"}
+            target_line = lines[0]
 
         url = target_line.get("url") or ""
         kind = target_line.get("url_kind") or ""
@@ -700,6 +717,11 @@ class Spider(BaseSpider):
         # 官方/4K：resolve_ticket → 换 m3u8，直连
         if kind == "resolve_ticket" or url.startswith("resolve://"):
             ticket = url.replace("resolve://", "")
+            
+            # 确保有游客 Session，否则官方接口会拒绝访问
+            if not self._logged_in:
+                self._ensure_login()
+
             line_data = self._post_json(
                 "/v1/playback/resolve-line", "?view=compact",
                 {"ticket": ticket}, tag=f"line/{label}",
@@ -755,42 +777,3 @@ class Spider(BaseSpider):
             except Exception:
                 return {}
         return {}
-
-
-# ==================== 测试入口 ====================
-if __name__ == "__main__":
-    spider = Spider()
-    spider.init()
-    try:
-        home = spider.homeVideoContent().get("list", [])
-        print("0. homeVideoContent:", len(home))
-
-        hc = spider.homeContent(True)
-        print("1. filters dict:", isinstance(hc.get("filters"), dict))
-
-        if home:
-            vid = home[0]["vod_id"]
-            res = spider.detailContent([vid])
-            lst = res.get("list", [])
-            print("2. detailContent:", len(lst), "条")
-            if lst:
-                play_from = lst[0].get("vod_play_from") or ""
-                lines = play_from.split("$$$")
-                print(f"   线路数: {len(lines)}")
-                for i, name in enumerate(lines):
-                    print(f"     [{i}] {name}")
-
-                play_url = lst[0].get("vod_play_url", "")
-                groups = play_url.split("$$$")
-                print(f"\n3. 测试前 2 条线路播放")
-                for i in range(min(2, len(lines))):
-                    if i >= len(groups) or not groups[i]:
-                        continue
-                    first_ep = groups[i].split("#")[0]
-                    ep_id = first_ep.split("$")[1]
-                    play_res = spider.playerContent("", ep_id)
-                    is_proxy = str(play_res.get("url", "")).startswith("http://127.0.0.1")
-                    print(f"   [{lines[i]}] parse={play_res.get('parse')} "
-                          f"proxy={is_proxy} url={str(play_res.get('url'))[:70]}")
-    finally:
-        spider.destroy()
