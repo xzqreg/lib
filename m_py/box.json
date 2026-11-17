@@ -17,14 +17,13 @@
    "api": "./yangshipin.py"
   },
   {
-   "key": "py_guazi",
-   "name": "瓜子[py]",
+   "key": "py_4kys",
+   "name": "4kys[优].py",
    "type": 3,
-   "api": "./guazi.py",
+   "api": "./4kys[优].py",
    "searchable": 1,
    "quickSearch": 1,
-   "filterable": 1,
-   "ext": {}
+   "filterable": 1
   },
   {
    "key": "py_SA视频采",
