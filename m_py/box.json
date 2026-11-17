@@ -243,94 +243,22 @@
   }
  ],
  "lives": [
-  {
-   "name": "cluntop",
-   "type": 0,
-   "url": "./lib/iptv.m3u"
-  },
-  {
-   "name": "cluntop_test",
-   "type": 0,
-   "url": "./lib/iptv_test.m3u"
-  },
-  {
-   "name": "歌手直播",
-   "type": 0,
-   "url": "https://mgtv.ottiptv.cc/mglist.m3u",
-   "ua": "okhttp/3.15"
-  },
-  {
-   "name": "虎牙一起看",
-   "type": 0,
-   "url": "https://sub.ottiptv.cc/huyayqk.m3u"
-  },
-  {
-   "name": "斗鱼一起看",
-   "type": 0,
-   "url": "https://sub.ottiptv.cc/douyuyqk.m3u"
-  },
-  {
-   "name": "B站直播",
-   "type": 0,
-   "url": "https://sub.ottiptv.cc/bililive.m3u"
-  },
-  {
-   "name": "YY轮播",
-   "type": 0,
-   "url": "https://sub.ottiptv.cc/yylunbo.m3u"
-  },
-  {
-   "name": "Kimentanm",
-   "type": 0,
-   "url": "https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u",
-   "playerType": 2
-  },
-  {
-   "name": "wqwqwq",
-   "type": 0,
-   "url": "https://la1.wqwqwq.sbs/tv.m3u"
-  },
-  {
-   "name": "YanG",
-   "type": "0",
-   "pass": true,
-   "url": "https://https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
-   "epg": "https://epg.112114.xyz/?ch={name}&date={date}",
-   "logo": "https://epg.112114.xyz/logo/{name}.png"
-  },
-  {
-   "name": "suxuang",
-   "type": "0",
-   "pass": true,
-   "url": "https://raw.githubusercontent.com/suxuang/myIPTV/main/ipv4.m3u",
-   "epg": "https://epg.112114.xyz/?ch={name}&date={date}",
-   "logo": "https://epg.112114.xyz/logo/{name}.png"
-  },
-  {
-   "name": "Guovin",
-   "type": 0,
-   "url": "https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u"
-  },
-  {
-   "name": "mlzlzj",
-   "type": 0,
-   "url": "https://raw.githubusercontent.com/mlzlzj/TV/main/output/result.m3u"
-  },
-  {
-   "name": "gambiarras",
-   "type": 0,
-   "url": "https://raw.githubusercontent.com/gambiarras/legal-iptv/refs/heads/main/playlist.m3u"
-  },
-  {
-   "name": "epg.pw All",
-   "type": 0,
-   "url": "https://m3u.002397.xyz/all.m3u"
-  },
-  {
-   "name": "iptv.org All",
-   "type": 0,
-   "url": "https://m3u.002397.xyz/o_all.m3u"
-  },
+    {
+      "name": "IPTV",
+      "url": "http://192.168.0.100:8767/all.m3u"
+    },
+    {
+      "name": "feiyang",
+      "url": "http://192.168.0.100:10000/all.m3u"
+    },
+    {
+      "name": "feiyanghy",
+      "url": "http://192.168.0.100:10000/huyayqk.m3u"
+    },
+    {
+      "name": "feiyangbl",
+      "url": "http://192.168.0.100:10000/bililive.m3u"
+    },
   {
    "group": "redirect",
    "channels": [
@@ -1036,9 +964,9 @@
   "migu"
  ],
  "warningText": "1",
- "danmaku": "https://127.0.0.1:9978/proxy?do=danmaku&name={name}&episode={episode}",
- "disabled_wallpaper": "./img/0.jpg",
- "wallpaper": "./img/0.jpg",
- "spider": "./jar/xs.jar",
- "logo": "./img/pg.gif"
+ "danmaku": "",
+ "disabled_wallpaper": "",
+ "wallpaper": "",
+ "spider": "",
+ "logo": ""
 }
