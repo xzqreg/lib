@@ -26,6 +26,24 @@
    "filterable": 1
   },
   {
+   "key": "py_耐看",
+   "name": "耐看点播.py",
+   "type": 3,
+   "api": "./耐看点播.py",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 1
+  },
+  {
+   "key": "py_闪雷",
+   "name": "闪雷.py",
+   "type": 3,
+   "api": "./闪雷.py",
+   "searchable": 1,
+   "quickSearch": 1,
+   "filterable": 1
+  },
+  {
    "key": "py_SA视频采",
    "name": "SA视频[采]",
    "type": 3,
@@ -44,10 +62,10 @@
    "filterable": 1
   },
   {
-   "key": "py_4kmp",
-   "name": "4kmp.py",
+   "key": "py_枫叶",
+   "name": "枫叶4K.py",
    "type": 3,
-   "api": "./4kmp.py",
+   "api": "./枫叶4K.py",
    "searchable": 1,
    "quickSearch": 1,
    "filterable": 1
