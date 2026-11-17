@@ -22,6 +22,7 @@ import json
 import time
 import zlib
 import hmac
+import uuid
 import tempfile
 import hashlib
 import random
@@ -47,9 +48,13 @@ PASSWORD = "Qqboy@362421"
 # 模块 / 动作
 M_USER, M_VOD = 2, 3
 A_LOGIN = 30
+A_USER_INFO = 32   # 用户信息（field 27 = 会员到期时间，epoch 秒）
+A_AD_REWARD = 40   # 看激励广告领会员（UserAdRewardRequest）
 A_LIST = 61        # 列表/搜索
 A_DETAIL = 62      # 详情
 A_PLAY = 69        # 播放地址
+
+VIP_SECONDS = 12 * 3600   # 一次广告奖励的会员时长（服务端下发 43200 秒）
 
 CHANNELS = [
     ("电视剧", "1"),
@@ -236,6 +241,7 @@ class Transport(object):
         self.session_id = None
         self.master = None
         self.user_token = None
+        self.vip_until = 0
         self._logging_in = False
         if not self._load_cache():          # 复用会话，省掉握手+登录（TVBox 每次请求可能新起进程）
             self.handshake()
@@ -255,6 +261,7 @@ class Transport(object):
             self.session_id = obj["sid"]
             self.master = master
             self.user_token = obj.get("tok")
+            self.vip_until = obj.get("vip") or 0
             return True
         except Exception:
             return False
@@ -262,7 +269,8 @@ class Transport(object):
     def _save_cache(self):
         try:
             json.dump({"sid": self.session_id, "master": self.master.hex(),
-                       "tok": self.user_token, "ts": time.time(), "dev": DEVICE_ID},
+                       "tok": self.user_token, "vip": self.vip_until,
+                       "ts": time.time(), "dev": DEVICE_ID},
                       open(CACHE_FILE, "w", encoding="utf-8"))
         except Exception:
             pass
@@ -338,6 +346,46 @@ class Transport(object):
         self.user_token = _txt(tok) if tok else None
         self._save_cache()
         return self.user_token
+
+    def vip_expire(self):
+        """服务端会员到期时间（epoch 秒），0 表示没有会员。"""
+        resp = self.rpc(M_USER, A_USER_INFO, b"")
+        info = pb_get(pb_get(resp, 4) or b"", 1) or b""
+        exp = pb_get(info, 27)
+        return exp if isinstance(exp, int) else 0
+
+    def claim_vip(self):
+        """绕过手机版 15 秒激励广告：用一条伪造的“广告已看完”上报领会员。
+
+        手机版流程 = 播 15s 激励视频 -> 上报 UserAdRewardRequest(交易号, isReward)
+        -> 服务端给 43200 秒会员。实测服务端只校验「交易号非空 + isReward=1」，
+        不校验广告是否真的播过（记录里 delivery=local，完全信客户端上报）。
+
+        安全起见先向服务端查真实到期时间，只有真过期才上报一次，绝不叠加：
+        每次播放被拦才查一次，正常一天最多领 1~2 次。
+
+        ponytail: 服务端一旦改成校验广告平台回执（trans_id 真实性），这里就失效，
+                  届时升级为复用真实广告回执。
+        """
+        if not self.user_token:
+            self.login()
+        try:
+            exp = self.vip_expire()
+        except Exception:
+            self.login()            # 缓存的 token 失效：重登一次再查
+            exp = self.vip_expire()
+        if exp > time.time() + 120:
+            self.vip_until = exp    # 还有会员，什么都不用做
+            self._save_cache()
+            return True
+        # LogAdData { 6: orderNo(交易号), 7: isReward }
+        log = f_bytes(6, uuid.uuid4().hex.encode()) + f_var(7, 1)
+        resp = self.rpc(M_USER, A_AD_REWARD, f_bytes(5, log))
+        info = pb_get(pb_get(resp, 4) or b"", 1) or b""
+        new_exp = pb_get(info, 27)
+        self.vip_until = new_exp if isinstance(new_exp, int) and new_exp > exp else exp + VIP_SECONDS
+        self._save_cache()
+        return self.vip_until > time.time()
 
     def rpc(self, module, action, payload=b""):
         try:
@@ -598,20 +646,31 @@ class Spider(object):
     def playerContent(self, flag, pid, vipFlags=None):
         pid = pid or ""
         header = {"User-Agent": "okhttp/3.12.13"}
-        url = ""
         # f1 是源/清晰度序号，每条线路不一样，逐个重试；直播频道（zb-xxx）固定 7
         order = (7, 1, 2, 3, 4, 5, 6, 8) if pid.startswith("zb-") else (2, 1, 3, 4, 5, 6, 7, 8, 0)
-        for q in order:
-            try:
-                resp = self._tp().rpc(M_VOD, A_PLAY, f_var(1, q) + f_bytes(2, pid.encode()))
-                payload = pb_get(resp, 4) or b""
-                url = _txt(pb_get(payload, 2) or b"")
-                if url:
-                    break
-            except Exception:
+        for attempt in (0, 1):
+            blocked = False
+            for q in order:
+                try:
+                    resp = self._tp().rpc(M_VOD, A_PLAY, f_var(1, q) + f_bytes(2, pid.encode()))
+                    payload = pb_get(resp, 4) or b""
+                    url = _txt(pb_get(payload, 2) or b"")
+                    if url:
+                        return {"parse": 0, "playUrl": "", "url": url, "header": header}
+                except Exception as e:
+                    msg = str(e)
+                    # 手机版现在是「先登录 + 会员才能播」，未登录/未领会员时自动补
+                    if "会员" in msg or "登录" in msg:
+                        blocked = True
+                        break
+                    continue
+            if blocked and attempt == 0:
+                try:
+                    self._tp().claim_vip()      # 免看广告领会员
+                except Exception:
+                    pass
                 continue
-        if url:
-            return {"parse": 0, "playUrl": "", "url": url, "header": header}
+            break
         # 接口没给地址、但本身是网页链接（如 youku）时，交给外部解析
         if pid.startswith("http://") or pid.startswith("https://"):
             return {"parse": 1, "playUrl": "", "url": pid, "header": header}
@@ -630,4 +689,12 @@ class Spider(object):
 if __name__ == "__main__":
     sp = Spider()
     print(sp.homeContent()["class"])
-    print(len(sp.categoryContent("1", 1, False, {"area": "中国"})["list"]))
+    lst = sp.categoryContent("1", 1, False, {"area": "中国"})["list"]
+    print(len(lst))
+    # 冒烟检查：免广告领会员 + 拿一集播放地址（失败会抛 assert）
+    vod = sp.detailContent([lst[0]["vod_id"]])["list"][0]
+    froms = vod["vod_play_from"].split("$$$")
+    pid = vod["vod_play_url"].split("$$$")[0].split("#")[0].split("$")[1]
+    assert sp._tp().claim_vip(), "claim_vip failed"
+    assert sp.playerContent(froms[0], pid)["url"], "no play url"
+    print("ad-bypass demo OK")
