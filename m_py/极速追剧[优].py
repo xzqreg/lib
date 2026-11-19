@@ -11,10 +11,6 @@
 import re
 import json
 import requests
-import threading
-from urllib.parse import quote, unquote, urljoin, urlparse, parse_qs
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
 
 # ===== TVBox / Termux 兼容层 =====
 try:
@@ -28,202 +24,12 @@ except ImportError:
 # =================================
 
 
-# ==================== HLS 清洗工具 ====================
-
-def clean_m3u8(text, ad_keywords, min_duration):
-    try:
-        lines = text.splitlines()
-        if not lines or lines[0].strip() != "#EXTM3U":
-            return text
-        header_lines, segments = [], []
-        cur = {"tags": [], "uri": "", "dur": 0.0}
-        in_seg = False
-        orig_seq = 0
-        for line in lines:
-            s = line.strip()
-            if not s:
-                continue
-            if s.startswith("#EXTINF:"):
-                in_seg = True
-                m = re.search(r"#EXTINF:([0-9.]+)", s)
-                cur["dur"] = float(m.group(1)) if m else 3.0
-                cur["tags"].append(line)
-            elif s.startswith("#EXT-X-MEDIA-SEQUENCE:"):
-                m = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", s)
-                if m:
-                    orig_seq = int(m.group(1))
-            elif s.startswith("#"):
-                if in_seg:
-                    cur["tags"].append(line)
-                else:
-                    header_lines.append(line)
-            else:
-                if in_seg:
-                    cur["uri"] = s
-                    segments.append(cur)
-                    cur = {"tags": [], "uri": "", "dur": 0.0}
-                    in_seg = False
-                else:
-                    header_lines.append(line)
-        if not segments:
-            return text
-        cleaned, removed = [], 0
-        for seg in segments:
-            uri_low = seg["uri"].lower()
-            is_ad = any(k in uri_low for k in ad_keywords)
-            if 0 < seg["dur"] <= min_duration:
-                is_ad = True
-            if is_ad:
-                removed += 1
-                continue
-            cleaned.extend(seg["tags"])
-            cleaned.append(seg["uri"])
-        out = ["#EXTM3U"]
-        out.extend(l for l in header_lines if not l.strip().startswith("#EXTM3U"))
-        if removed > 0:
-            out.append(f"#EXT-X-MEDIA-SEQUENCE:{orig_seq + removed}")
-        out.extend(cleaned)
-        out.append("#EXT-X-ENDLIST")
-        return "\n".join(out)
-    except Exception:
-        return text
-
-
-def absolutize_m3u8(text, base_url):
-    try:
-        p = urlparse(base_url)
-        base_dir = p.path.rsplit("/", 1)[0] + "/"
-        base = f"{p.scheme}://{p.netloc}{base_dir}"
-        out = []
-        for line in text.splitlines():
-            s = line.strip()
-            if s and not s.startswith("#"):
-                out.append(urljoin(base, s))
-            else:
-                out.append(line)
-        return "\n".join(out)
-    except Exception:
-        return text
-
-
-class HLSProxyServer:
-    _server = None
-    _port = 0
-    _lock = threading.Lock()
-
-    class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-        daemon_threads = True
-        allow_reuse_address = True
-
-    @classmethod
-    def start(cls, config):
-        with cls._lock:
-            if cls._server is not None:
-                return cls._port
-            for port in range(9979, 9999):
-                try:
-                    handler = cls._make_handler(config)
-                    srv = cls._ThreadingHTTPServer(("127.0.0.1", port), handler)
-                    threading.Thread(target=srv.serve_forever, daemon=True).start()
-                    cls._server = srv
-                    cls._port = port
-                    return port
-                except OSError:
-                    continue
-                except Exception:
-                    continue
-            return 0
-
-    @classmethod
-    def stop(cls):
-        with cls._lock:
-            if cls._server is not None:
-                try:
-                    cls._server.shutdown()
-                except Exception:
-                    pass
-                cls._server = None
-                cls._port = 0
-
-    @classmethod
-    def _make_handler(cls, config):
-        ad_keywords = config.get("ad_keywords", [])
-        min_duration = config.get("min_duration", 1.2)
-        default_ua = config.get("ua", "Mozilla/5.0")
-        default_ref = config.get("referer", "")
-
-        class Handler(BaseHTTPRequestHandler):
-            def _rewrite_master(self, text, base_url):
-                port = HLSProxyServer._port
-                if port <= 0:
-                    return text
-                out = []
-                for line in text.splitlines():
-                    s = line.strip()
-                    if not s or s.startswith("#"):
-                        out.append(line)
-                        continue
-                    absolute = urljoin(base_url, s)
-                    if ".m3u8" in absolute.lower():
-                        out.append(f"http://127.0.0.1:{port}/?url={quote(absolute, safe='')}")
-                    else:
-                        out.append(absolute)
-                return "\n".join(out)
-
-            def _do_fetch(self):
-                try:
-                    parsed = urlparse(self.path)
-                    params = parse_qs(parsed.query)
-                    target = params.get("url", [""])[0]
-                    if not target:
-                        self.send_response(400)
-                        self.end_headers()
-                        return
-                    headers = {"User-Agent": default_ua, "Accept": "*/*"}
-                    if default_ref:
-                        headers["Referer"] = default_ref
-                    r = requests.get(target, headers=headers, timeout=15)
-                    text = r.content.decode("utf-8", "replace")
-                    if "#EXT-X-STREAM-INF" in text:
-                        text = self._rewrite_master(text, target)
-                    else:
-                        text = clean_m3u8(text, ad_keywords, min_duration)
-                        text = absolutize_m3u8(text, target)
-                    body = text.encode("utf-8")
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/vnd.apple.mpegurl")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    if self.command != "HEAD":
-                        self.wfile.write(body)
-                except Exception:
-                    try:
-                        self.send_response(502)
-                        self.end_headers()
-                    except Exception:
-                        pass
-
-            def do_GET(self): self._do_fetch()
-            def do_HEAD(self): self._do_fetch()
-            def do_OPTIONS(self):
-                self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "*")
-                self.end_headers()
-
-            def log_message(self, *args): pass
-
-        return Handler
-
-
-# ==================== 主类 ====================
-
 class Spider(BaseSpider):
-    PROXY_LINES = {"bfzym3u8", "jsm3u8"}
     PAGE_SIZE = 12
-    MAX_PAGECOUNT = 999  # ★ 分页上限，避免壳因过大的 pagecount 不渲染
+    MAX_PAGECOUNT = 999
+
+    # 线路顺序：普通线路优先（电视端默认能播），官方线路放后面
+    LINE_ORDER = {"bfzym3u8": 0, "jsm3u8": 1, "covip": 2, "qq": 3}
 
     def init(self, extend=""):
         self.host = "https://jisuzhuiju.com"
@@ -241,20 +47,17 @@ class Spider(BaseSpider):
             "bfzym3u8": "普通线路二",
             "jsm3u8": "普通线路一",
         }
-        self.proxy_config = {
-            "ad_keywords": ["ad", "ads", "advert", "preroll", "片头", "广告",
-                            "/gg/", "banner", "promo", "casino", "博彩",
-                            "充值", "slot", "sponsor"],
-            "min_duration": 1.2,
-            "ua": self.headers["User-Agent"],
-            "referer": self.host + "/",
-        }
 
     def destroy(self):
-        try:
-            HLSProxyServer.stop()
-        except Exception:
-            pass
+        # 代理已移除，保留空钩子兼容旧调用
+        pass
+
+    def getName(self):
+        return "极速追剧"
+
+    def getDependence(self):
+        # 本源只依赖 requests（APK 已内置），无需额外声明
+        return []
 
     @staticmethod
     def _safe_dict(v):
@@ -284,6 +87,21 @@ class Spider(BaseSpider):
         if isinstance(v, str):
             return [v] if v else []
         return [str(v)]
+
+    # ★ 按播放直链域名智能匹配 Referer，解决官方线路电视端防盗链
+    def _guess_referer(self, url):
+        low = (url or "").lower()
+        if "qq.com" in low or "gtimg" in low or "qpic" in low or "tencent" in low:
+            return "https://v.qq.com/"
+        if "mgtv" in low:
+            return "https://www.mgtv.com/"
+        if "iqiyi" in low or "qy.net" in low:
+            return "https://www.iqiyi.com/"
+        if "youku" in low or "ykimg" in low:
+            return "https://www.youku.com/"
+        if "bilibili" in low or "bilivideo" in low:
+            return "https://www.bilibili.com/"
+        return self.host + "/"
 
     # ---------------- 首页分类 + 筛选 ----------------
     def homeContent(self, filter=False):
@@ -316,7 +134,6 @@ class Spider(BaseSpider):
 
     # ---------------- 筛选构建 ----------------
     def _filter_options(self, key):
-        """返回某筛选维度的选项列表"""
         if key == "type":
             return [
                 {"n": "全部", "v": ""}, {"n": "剧情", "v": "7"},
@@ -365,7 +182,6 @@ class Spider(BaseSpider):
         return keys
 
     def _build_filter_objects(self, tid):
-        """★ homeContent 用：list of {key,name,value} 对象"""
         name_map = {"type": "类型", "area": "地区", "year": "年份", "sort": "排序"}
         return [
             {"key": k, "name": name_map[k], "value": self._filter_options(k)}
@@ -373,10 +189,9 @@ class Spider(BaseSpider):
         ]
 
     def _build_filters_dict(self, tid):
-        """★ categoryContent 用：dict {key: [options]}，与 iysdq1_spider.py 对齐"""
         return {k: self._filter_options(k) for k in self._filter_keys_for(tid)}
 
-    # ---------------- 分类列表 ★ 核心修复 ★ ----------------
+    # ---------------- 分类列表 ----------------
     def categoryContent(self, tid="1", pg="1", filter=False, extend=None):
         tid = str(tid or "1")
         try:
@@ -399,12 +214,10 @@ class Spider(BaseSpider):
             html = rsp.text
             videos = self._parse_list(html)
 
-            # ★ 修复1：pagecount 用「当前页 + 1」策略，避免 4082 这种超大值让壳不渲染
             has_next = bool(re.search(r'下一页|下页|尾页', html))
             if not has_next and videos:
                 has_next = len(videos) >= self.PAGE_SIZE
             pagecount = pg_num + 1 if has_next else pg_num
-            # 保险：极端情况也不超过上限
             if pagecount > self.MAX_PAGECOUNT:
                 pagecount = self.MAX_PAGECOUNT
 
@@ -414,7 +227,6 @@ class Spider(BaseSpider):
                 "pagecount": pagecount,
                 "limit": self.PAGE_SIZE,
                 "total": pagecount * self.PAGE_SIZE,
-                # ★ 修复2：filters 用 dict 格式（{key: [options]}），与 iysdq1 对齐
                 "filters": self._build_filters_dict(tid),
             }
         except Exception:
@@ -492,6 +304,9 @@ class Spider(BaseSpider):
         except Exception:
             return {"list": []}
 
+    def searchContentPage(self, key="", quick=False, pg="1"):
+        return self.searchContent(key, quick, pg)
+
     # ---------------- 播放解析 ----------------
     def playerContent(self, flag="", id="", vipFlags=None):
         id = str(id or "")
@@ -509,18 +324,18 @@ class Spider(BaseSpider):
             play_url = data.get("url") or (data.get("data") or {}).get("url") or ""
             if not play_url:
                 return {"parse": 1, "url": "", "msg": "API 未返回播放地址"}
+
+            # ★ 关键：按直链域名给正确的 Referer，官方线路电视端才有可能播
             header = {
                 "User-Agent": self.headers["User-Agent"],
-                "Referer": self.host + "/",
+                "Referer": self._guess_referer(play_url),
             }
+
+            # ★ 统一 parse=0 直连：不再依赖电视端弱的嗅探，也不走本地代理
             if ".m3u8" in play_url or ".mp4" in play_url:
-                if play_from in self.PROXY_LINES and ".m3u8" in play_url:
-                    port = HLSProxyServer.start(self.proxy_config)
-                    if port > 0:
-                        proxy_url = f"http://127.0.0.1:{port}/?url={quote(play_url, safe='')}"
-                        return {"parse": 0, "url": proxy_url, "header": header}
                 return {"parse": 0, "url": play_url, "header": header}
-            return {"parse": 1, "url": play_url, "header": self.headers}
+            # 非直链格式（极少见）才退回 parse=1
+            return {"parse": 1, "url": play_url, "header": header}
         except Exception as e:
             return {"parse": 1, "url": "", "msg": f"解析失败: {str(e)}"}
 
@@ -586,9 +401,14 @@ class Spider(BaseSpider):
         for m in pattern.finditer(html):
             key, index, ep_name = m.group(1), m.group(2), m.group(3).strip()
             groups.setdefault(key, []).append((int(index), ep_name))
+
+        # ★ 普通线路排前、官方线路排后，电视端默认落在能播的线路上
+        ordered_keys = sorted(groups.keys(),
+                              key=lambda k: self.LINE_ORDER.get(k, 99))
+
         sources = []
-        for key, eps in groups.items():
-            eps.sort(key=lambda x: x[0])
+        for key in ordered_keys:
+            eps = sorted(groups[key], key=lambda x: x[0])
             episodes = [f"{name}${vod_id}|{key}|{idx}" for idx, name in eps]
             sources.append({
                 "name": self.line_name_map.get(key, key),
@@ -620,7 +440,6 @@ if __name__ == "__main__":
         print("影片数:", len(res.get("list", [])),
               "| pagecount:", res.get("pagecount"),
               "| filters 是 dict:", isinstance(res.get("filters"), dict))
-        print("filters keys:", list(res.get("filters", {}).keys()))
 
         print("\n3. categoryContent · extend=JSON字符串")
         res = spider.categoryContent("1", "1", True, '{"area":"大陆","year":"2025"}')
@@ -642,12 +461,15 @@ if __name__ == "__main__":
         res = spider.searchContent("兰香", True)
         print("结果数:", len(res.get("list", [])))
 
-        print("\n8. playerContent · 腾讯官方")
+        print("\n8. playerContent · 腾讯官方（应 parse=0 直连 + 腾讯 Referer）")
         res = spider.playerContent("腾讯官方线路", "561|qq|1", [])
-        print("parse:", res.get("parse"), "| 走代理:", res.get("url", "").startswith("http://127.0.0.1"))
+        print("parse:", res.get("parse"),
+              "| Referer:", (res.get("header") or {}).get("Referer"),
+              "| url 前缀:", res.get("url", "")[:50])
 
-        print("\n9. playerContent · 普通线路二（走代理）")
+        print("\n9. playerContent · 普通线路二（应 parse=0 直连）")
         res = spider.playerContent("普通线路二", "561|bfzym3u8|1", [])
-        print("parse:", res.get("parse"), "| 走代理:", res.get("url", "").startswith("http://127.0.0.1"))
+        print("parse:", res.get("parse"),
+              "| url 前缀:", res.get("url", "")[:50])
     finally:
         spider.destroy()
