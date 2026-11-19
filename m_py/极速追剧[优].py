@@ -11,6 +11,10 @@
 import re
 import json
 import requests
+import threading
+from urllib.parse import quote, urljoin, urlparse, parse_qs
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
 # ===== TVBox / Termux 兼容层 =====
 try:
@@ -24,12 +28,143 @@ except ImportError:
 # =================================
 
 
+# ==================== HLS 转发工具（只绝对化，不清广告） ====================
+
+def absolutize_m3u8(text, base_url):
+    """把 m3u8 里的相对分片地址补成绝对地址，播放器才能直连 CDN 拉分片"""
+    try:
+        p = urlparse(base_url)
+        base_dir = p.path.rsplit("/", 1)[0] + "/"
+        base = f"{p.scheme}://{p.netloc}{base_dir}"
+        out = []
+        for line in text.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#"):
+                out.append(urljoin(base, s))
+            else:
+                out.append(line)
+        return "\n".join(out)
+    except Exception:
+        return text
+
+
+class HLSProxyServer:
+    _server = None
+    _port = 0
+    _lock = threading.Lock()
+
+    class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    @classmethod
+    def start(cls, config):
+        with cls._lock:
+            if cls._server is not None:
+                return cls._port
+            for port in range(9979, 9999):
+                try:
+                    handler = cls._make_handler(config)
+                    srv = cls._ThreadingHTTPServer(("127.0.0.1", port), handler)
+                    threading.Thread(target=srv.serve_forever, daemon=True).start()
+                    cls._server = srv
+                    cls._port = port
+                    return port
+                except OSError:
+                    continue
+                except Exception:
+                    continue
+            return 0
+
+    @classmethod
+    def stop(cls):
+        with cls._lock:
+            if cls._server is not None:
+                try:
+                    cls._server.shutdown()
+                except Exception:
+                    pass
+                cls._server = None
+                cls._port = 0
+
+    @classmethod
+    def _make_handler(cls, config):
+        default_ua = config.get("ua", "Mozilla/5.0")
+        default_ref = config.get("referer", "")
+
+        class Handler(BaseHTTPRequestHandler):
+            def _rewrite_master(self, text, base_url):
+                port = HLSProxyServer._port
+                if port <= 0:
+                    return text
+                out = []
+                for line in text.splitlines():
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        out.append(line)
+                        continue
+                    absolute = urljoin(base_url, s)
+                    if ".m3u8" in absolute.lower():
+                        out.append(f"http://127.0.0.1:{port}/?url={quote(absolute, safe='')}")
+                    else:
+                        out.append(absolute)
+                return "\n".join(out)
+
+            def _do_fetch(self):
+                try:
+                    parsed = urlparse(self.path)
+                    params = parse_qs(parsed.query)
+                    target = params.get("url", [""])[0]
+                    if not target:
+                        self.send_response(400)
+                        self.end_headers()
+                        return
+                    headers = {"User-Agent": default_ua, "Accept": "*/*"}
+                    if default_ref:
+                        headers["Referer"] = default_ref
+                    r = requests.get(target, headers=headers, timeout=15)
+                    text = r.content.decode("utf-8", "replace")
+                    if "#EXT-X-STREAM-INF" in text:
+                        # 主播放列表：子 playlist 继续走代理（保证 UA/Referer 一直生效）
+                        text = self._rewrite_master(text, target)
+                    else:
+                        # 媒体播放列表：只绝对化，不清广告
+                        text = absolutize_m3u8(text, target)
+                    body = text.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        self.wfile.write(body)
+                except Exception:
+                    try:
+                        self.send_response(502)
+                        self.end_headers()
+                    except Exception:
+                        pass
+
+            def do_GET(self): self._do_fetch()
+            def do_HEAD(self): self._do_fetch()
+            def do_OPTIONS(self):
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "*")
+                self.end_headers()
+
+            def log_message(self, *args): pass
+
+        return Handler
+
+
+# ==================== 主类 ====================
+
 class Spider(BaseSpider):
+    PROXY_LINES = {"bfzym3u8", "jsm3u8"}
     PAGE_SIZE = 12
     MAX_PAGECOUNT = 999
-
-    # 线路顺序：普通线路优先（电视端默认能播），官方线路放后面
-    LINE_ORDER = {"bfzym3u8": 0, "jsm3u8": 1, "covip": 2, "qq": 3}
 
     def init(self, extend=""):
         self.host = "https://jisuzhuiju.com"
@@ -47,16 +182,22 @@ class Spider(BaseSpider):
             "bfzym3u8": "普通线路二",
             "jsm3u8": "普通线路一",
         }
+        # 代理只用来转发 m3u8（带 UA/Referer + 绝对化），不再清洗广告
+        self.proxy_config = {
+            "ua": self.headers["User-Agent"],
+            "referer": self.host + "/",
+        }
 
     def destroy(self):
-        # 代理已移除，保留空钩子兼容旧调用
-        pass
+        try:
+            HLSProxyServer.stop()
+        except Exception:
+            pass
 
     def getName(self):
         return "极速追剧"
 
     def getDependence(self):
-        # 本源只依赖 requests（APK 已内置），无需额外声明
         return []
 
     @staticmethod
@@ -88,7 +229,7 @@ class Spider(BaseSpider):
             return [v] if v else []
         return [str(v)]
 
-    # ★ 按播放直链域名智能匹配 Referer，解决官方线路电视端防盗链
+    # 智能 Referer：按直链域名匹配
     def _guess_referer(self, url):
         low = (url or "").lower()
         if "qq.com" in low or "gtimg" in low or "qpic" in low or "tencent" in low:
@@ -325,16 +466,20 @@ class Spider(BaseSpider):
             if not play_url:
                 return {"parse": 1, "url": "", "msg": "API 未返回播放地址"}
 
-            # ★ 关键：按直链域名给正确的 Referer，官方线路电视端才有可能播
             header = {
                 "User-Agent": self.headers["User-Agent"],
                 "Referer": self._guess_referer(play_url),
             }
 
-            # ★ 统一 parse=0 直连：不再依赖电视端弱的嗅探，也不走本地代理
             if ".m3u8" in play_url or ".mp4" in play_url:
+                # 普通线路（bfzym3u8 / jsm3u8）：走本地代理转发 m3u8（带 UA/Referer + 绝对化）
+                if play_from in self.PROXY_LINES and ".m3u8" in play_url:
+                    port = HLSProxyServer.start(self.proxy_config)
+                    if port > 0:
+                        proxy_url = f"http://127.0.0.1:{port}/?url={quote(play_url, safe='')}"
+                        return {"parse": 0, "url": proxy_url, "header": header}
+                # 官方线路（qq / covip）及兜底：直连 + 智能 Referer
                 return {"parse": 0, "url": play_url, "header": header}
-            # 非直链格式（极少见）才退回 parse=1
             return {"parse": 1, "url": play_url, "header": header}
         except Exception as e:
             return {"parse": 1, "url": "", "msg": f"解析失败: {str(e)}"}
@@ -392,6 +537,7 @@ class Spider(BaseSpider):
         return videos
 
     def _parse_play_from_html(self, html, vod_id):
+        # 线路名与顺序保持原样，按页面出现顺序
         pattern = re.compile(
             r'<a[^>]+href="/vodplay/' + re.escape(vod_id) +
             r'-([A-Za-z0-9]+)-(\d+)\.html"[^>]*>([^<]+)</a>',
@@ -402,13 +548,9 @@ class Spider(BaseSpider):
             key, index, ep_name = m.group(1), m.group(2), m.group(3).strip()
             groups.setdefault(key, []).append((int(index), ep_name))
 
-        # ★ 普通线路排前、官方线路排后，电视端默认落在能播的线路上
-        ordered_keys = sorted(groups.keys(),
-                              key=lambda k: self.LINE_ORDER.get(k, 99))
-
         sources = []
-        for key in ordered_keys:
-            eps = sorted(groups[key], key=lambda x: x[0])
+        for key, eps in groups.items():
+            eps.sort(key=lambda x: x[0])
             episodes = [f"{name}${vod_id}|{key}|{idx}" for idx, name in eps]
             sources.append({
                 "name": self.line_name_map.get(key, key),
@@ -433,13 +575,10 @@ if __name__ == "__main__":
         print("\n1. homeContent")
         res = spider.homeContent(True)
         print("filters 频道:", list(res.get("filters", {}).keys()))
-        print("filters[1] 是 list:", isinstance(res["filters"]["1"], list))
 
         print("\n2. categoryContent · extend=dict")
         res = spider.categoryContent("1", "1", True, {"area": "大陆", "year": "2025"})
-        print("影片数:", len(res.get("list", [])),
-              "| pagecount:", res.get("pagecount"),
-              "| filters 是 dict:", isinstance(res.get("filters"), dict))
+        print("影片数:", len(res.get("list", [])), "| pagecount:", res.get("pagecount"))
 
         print("\n3. categoryContent · extend=JSON字符串")
         res = spider.categoryContent("1", "1", True, '{"area":"大陆","year":"2025"}')
@@ -461,15 +600,15 @@ if __name__ == "__main__":
         res = spider.searchContent("兰香", True)
         print("结果数:", len(res.get("list", [])))
 
-        print("\n8. playerContent · 腾讯官方（应 parse=0 直连 + 腾讯 Referer）")
+        print("\n8. playerContent · 腾讯官方（应 parse=0 直连 + v.qq.com Referer）")
         res = spider.playerContent("腾讯官方线路", "561|qq|1", [])
         print("parse:", res.get("parse"),
               "| Referer:", (res.get("header") or {}).get("Referer"),
-              "| url 前缀:", res.get("url", "")[:50])
+              "| 走代理:", res.get("url", "").startswith("http://127.0.0.1"))
 
-        print("\n9. playerContent · 普通线路二（应 parse=0 直连）")
+        print("\n9. playerContent · 普通线路二（应 parse=0 走本地代理）")
         res = spider.playerContent("普通线路二", "561|bfzym3u8|1", [])
         print("parse:", res.get("parse"),
-              "| url 前缀:", res.get("url", "")[:50])
+              "| 走代理:", res.get("url", "").startswith("http://127.0.0.1"))
     finally:
         spider.destroy()
