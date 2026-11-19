@@ -10,6 +10,15 @@
       "filterable": 0
     },
     {
+      "key": "py_iysdq1_spider",
+      "name": "iysdq1_spider.py",
+      "type": 3,
+      "api": "./iysdq1_spider.py",
+      "searchable": 1,
+      "quickSearch": 1,
+      "filterable": 1
+    },
+    {
       "key": "py_4kys",
       "name": "4kys[优].py",
       "type": 3,
