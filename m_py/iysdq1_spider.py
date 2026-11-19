@@ -123,7 +123,7 @@ DEFAULT_CONFIG = {
     "proxy_clean_m3u8": True,
 
     # ★ 图片走本地代理：电视端封面不显示时改 True
-    "proxy_image": False,
+    "proxy_image": True,
 
     "debug": False,
 }
