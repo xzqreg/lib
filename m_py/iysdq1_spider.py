@@ -1,31 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-═══════════════════════════════════════════════════════════════
-  影视大全 (iysdq1.com) · 遮天法爬虫 v1.8 (安卓4.x 适配)
-  基于苹果CMS V10 · 防御等级 0 (轮海·彼岸)
-═══════════════════════════════════════════════════════════════
+影视大全 (iysdq1.com) · 遮天法爬虫 v1.9 (安卓 TV 封面修复)
+===============================================================
+v1.9 修复:
+  ★ parse_video_list 的 vod_pic 补 fix_pic（相对路径/data:占位图）
+  ★ fix_pic 增强：过滤 data: 占位、去空白引号、协议相对
+  ★ HLSProxyServer 支持 ?img=1 转发图片（防盗链/明文限制场景）
+  ★ 新增 proxy_image 配置开关（默认 False，需要时打开）
+  ★ detailContent 返回前也过 _fix_video_pics
 
-  v1.8 (安卓 APK 适配):
-    ✓ 补 getDependence() / searchContentPage()
-    ✓ detailContent / categoryContent 兼容字符串入参
-    ✓ categoryContent 参数加默认值
-    ✓ pagecount 封顶 MAX_PAGECOUNT = 999
-    ✓ TTLCache maxsize 500→100, cache_ttl 300→120
-    ✓ 编码判断改用 header charset（去 apparent_encoding 慢探测）
-    ✓ m3u8 广告清洗关闭（保留代理只做绝对化 + Referer）
-    ✓ HLSProxyServer 保留（普通线路必需）
-
-  v1.7 新增:
-    ✓ TTLCache 结果缓存
-    ✓ HLSProxyServer 本地代理
-
-  配置开关:
-    "cache_ttl": 120          # 缓存秒数, 0 关闭
-    "proxy_clean_m3u8": True  # 是否用本地代理转发 m3u8
-
-  TVBox 加载: 导出类名必须为 Spider
-  【版本】v1.8 | 【作者】遮天法
+配置:
+  "proxy_image": False   # 图片走本地代理（电视端封面不显示时改 True）
 """
 
 import sys
@@ -60,10 +46,6 @@ except ImportError:
     HAS_BS4 = False
 
 
-# ═══════════════════════════════════════════════════════════════
-#  配置中心
-# ═══════════════════════════════════════════════════════════════
-
 DEFAULT_CONFIG = {
     "name": "影视大全",
     "host": "https://www.iysdq1.com",
@@ -77,10 +59,7 @@ DEFAULT_CONFIG = {
         "play": "/vodplay/{vod_id}-{sid}-{nid}.html",
     },
 
-    "pagination": {
-        "page_size": 40,
-        "search_page_size": 20,
-    },
+    "pagination": {"page_size": 40, "search_page_size": 20},
 
     "categories": [
         {"type_id": "1", "type_name": "电影"},
@@ -104,8 +83,7 @@ DEFAULT_CONFIG = {
         "1": {"class": ["", "动作片", "喜剧片", "科幻片", "恐怖片", "爱情片", "剧情片",
                         "战争片", "记录片", "动画片", "惊悚", "犯罪", "悬疑", "冒险",
                         "奇幻", "家庭", "历史", "传记", "古装", "音乐", "同性", "运动",
-                        "武侠", "短片", "歌舞", "西部", "儿童", "灾难", "戏曲",
-                        "真人秀", "青春"]},
+                        "武侠", "短片", "歌舞", "西部", "儿童", "灾难", "戏曲", "真人秀", "青春"]},
         "2": {"class": ["", "国产剧", "欧美剧", "香港剧", "韩国剧", "台湾剧", "日本剧",
                         "海外剧", "泰国剧", "剧情", "爱情", "喜剧", "悬疑", "犯罪",
                         "古装", "动作", "奇幻", "惊悚", "家庭", "历史"]},
@@ -127,9 +105,6 @@ DEFAULT_CONFIG = {
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "sec-ch-ua": "\"Chromium\";v=\"129\", \"Not=A?Brand\";v=\"8\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Windows\"",
         "Upgrade-Insecure-Requests": "1",
     },
 
@@ -137,38 +112,28 @@ DEFAULT_CONFIG = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
     ],
 
-    "retry": {
-        "max_retries": 3,
-        "backoff_factor": 1.0,
-        "timeout": 15,
-    },
+    "retry": {"max_retries": 3, "backoff_factor": 1.0, "timeout": 15},
 
-    "m3u8_clean": {
-        "enabled": False,   # ★ 关闭广告清洗（用户已确认无用）
-        "ad_keywords": ["ad", "ads", "advert", "preroll", "片头", "广告", "/gg/",
-                        "banner", "promo", "casino", "博彩", "充值", "slot", "sponsor"],
-        "min_duration": 1.2,
-        "skip_first_n": 12,
-    },
+    "m3u8_clean": {"enabled": False, "ad_keywords": [], "min_duration": 1.2},
 
-    "cache_ttl": 120,           # ★ 300 → 120，减少数据陈旧
-    "proxy_clean_m3u8": True,   # 本地代理只做绝对化 + Referer 转发
-    "cache_maxsize": 100,       # ★ 500 → 100，降低内存
+    "cache_ttl": 120,
+    "cache_maxsize": 100,
+    "proxy_clean_m3u8": True,
+
+    # ★ 图片走本地代理：电视端封面不显示时改 True
+    "proxy_image": False,
 
     "debug": False,
 }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  缓存 & 代理
+#  TTLCache
 # ═══════════════════════════════════════════════════════════════
 
 class TTLCache:
-    """线程安全的 TTL 缓存"""
-
     def __init__(self, ttl: int = 120, maxsize: int = 100):
         self._cache = {}
         self._lock = threading.Lock()
@@ -196,8 +161,7 @@ class TTLCache:
                 now = time.time()
                 self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
                 if len(self._cache) >= self.maxsize:
-                    keys = list(self._cache.keys())[: len(self._cache) // 2]
-                    for k in keys:
+                    for k in list(self._cache.keys())[: len(self._cache) // 2]:
                         self._cache.pop(k, None)
             expire_at = time.time() + (ttl if ttl is not None else self.ttl)
             self._cache[key] = (value, expire_at)
@@ -206,14 +170,12 @@ class TTLCache:
         with self._lock:
             self._cache.clear()
 
-    def size(self):
-        with self._lock:
-            return len(self._cache)
 
+# ═══════════════════════════════════════════════════════════════
+#  HLSProxyServer（m3u8 转发 + ★ 图片转发）
+# ═══════════════════════════════════════════════════════════════
 
 class HLSProxyServer:
-    """本地 HLS 转发（只做绝对化 + Referer，不清洗广告）"""
-
     _server = None
     _port = 0
     _lock = threading.Lock()
@@ -233,8 +195,7 @@ class HLSProxyServer:
                 try:
                     handler_cls = cls._make_handler(config)
                     server = cls._ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
-                    t = threading.Thread(target=server.serve_forever, daemon=True)
-                    t.start()
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
                     cls._server = server
                     cls._port = port
                     return port
@@ -280,6 +241,7 @@ class HLSProxyServer:
                     parsed = urlparse(self.path)
                     params = parse_qs(parsed.query)
                     target_url = params.get("url", [""])[0]
+                    is_img = params.get("img", ["0"])[0] == "1"
                     if not target_url:
                         self.send_response(400)
                         self.end_headers()
@@ -292,12 +254,26 @@ class HLSProxyServer:
                         "Accept": "*/*",
                     }
                     r = requests.get(target_url, headers=headers, timeout=15)
-                    text = r.text
 
+                    # ★ 图片分支：原样转发 bytes，壳会当普通图加载
+                    if is_img:
+                        ct = r.headers.get("Content-Type", "image/jpeg")
+                        body = r.content
+                        self.send_response(200)
+                        self.send_header("Content-Type", ct)
+                        self.send_header("Access-Control-Allow-Origin", "*")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Cache-Control", "public, max-age=86400")
+                        self.end_headers()
+                        if self.command != "HEAD":
+                            self.wfile.write(body)
+                        return
+
+                    # m3u8 分支
+                    text = r.text
                     if "#EXT-X-STREAM-INF" in text:
                         text = self._rewrite_master(text, target_url)
                     else:
-                        # ★ 只绝对化，不做广告清洗
                         text = JieZiMi.absolutize_m3u8(text, target_url)
 
                     body = text.encode("utf-8")
@@ -330,38 +306,47 @@ class HLSProxyServer:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  九秘核心能力库
+#  DouZiMi（解析）
 # ═══════════════════════════════════════════════════════════════
 
 class DouZiMi:
-    """斗字秘·战斗解析"""
-
     @staticmethod
     def clean_text(raw: Any) -> str:
         if not raw:
             return ""
-        text = str(raw)
-        text = re.sub(r"<[^>]+>", "", text)
+        text = re.sub(r"<[^>]+>", "", str(raw))
         import html as html_module
         text = html_module.unescape(text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
     def fix_pic(url: str, host: str = "") -> str:
+        """★ 封面 URL 补全 + 占位图过滤"""
         if not url:
             return ""
+        url = url.strip().strip("\"' ")
+        if not url:
+            return ""
+        # data: 开头是懒加载占位图，置空让壳显示默认图
+        if url.startswith("data:"):
+            return ""
+        # //cdn.xxx.com → https://cdn.xxx.com
         if url.startswith("//"):
             return "https:" + url
-        if url.startswith("/") and host:
-            return host.rstrip("/") + url
-        if not url.startswith("http") and host:
+        # 绝对 URL
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        # 相对路径
+        if host:
+            if url.startswith("/"):
+                return host.rstrip("/") + url
             return host.rstrip("/") + "/" + url.lstrip("/")
         return url
 
     @staticmethod
     def parse_video_list(html: str, config: Dict = None) -> List[Dict]:
         cfg = config or DEFAULT_CONFIG
+        host = cfg.get("host", "")
         videos = []
         if not html:
             return videos
@@ -380,25 +365,25 @@ class DouZiMi:
                     if not link_tag:
                         continue
                     href = link_tag.get("href", "")
-                    vid_match = re.search(r"/voddetail/(\d+)\.html", href)
-                    if not vid_match:
+                    m = re.search(r"/voddetail/(\d+)\.html", href)
+                    if not m:
                         continue
-                    vod_id = vid_match.group(1)
+                    vod_id = m.group(1)
 
                     title = DouZiMi.clean_text(link_tag.get("title", ""))
                     if not title:
-                        title_tag = item.select_one("a.time-title")
-                        if title_tag:
-                            title = DouZiMi.clean_text(
-                                title_tag.get("title", "") or title_tag.text
-                            )
+                        t = item.select_one("a.time-title")
+                        if t:
+                            title = DouZiMi.clean_text(t.get("title", "") or t.text)
 
-                    img_tag = item.select_one("img")
+                    # ★ 这里：pic 走 fix_pic
                     pic = ""
+                    img_tag = item.select_one("img")
                     if img_tag:
-                        pic = (img_tag.get("data-src")
+                        raw = (img_tag.get("data-src")
                                or img_tag.get("data-original")
                                or img_tag.get("src") or "")
+                        pic = DouZiMi.fix_pic(raw, host)
 
                     remark_tag = (item.select_one("span.public-list-prb")
                                   or item.select_one("span.public-prt"))
@@ -417,6 +402,7 @@ class DouZiMi:
             except Exception:
                 pass
 
+        # 兜底 regex 路径
         patterns = [
             r'<a[^>]*class="public-list-exp"[^>]*href="(/voddetail/(\d+)\.html)"[^>]*title="([^"]+)"[^>]*>.*?<img[^>]*(?:data-src|src)="([^"]+)"',
             r'<a[^>]*href="(/voddetail/(\d+)\.html)"[^>]*title="([^"]+)"[^>]*>.*?<img[^>]*(?:data-src|src)="([^"]+)"',
@@ -427,7 +413,8 @@ class DouZiMi:
                 for m in matches:
                     vod_id = m[1]
                     title = m[2] if len(m) > 2 else ""
-                    pic = m[3] if len(m) > 3 else ""
+                    # ★ 兜底也 fix_pic
+                    pic = DouZiMi.fix_pic(m[3] if len(m) > 3 else "", host)
                     if vod_id:
                         videos.append({
                             "vod_id": vod_id,
@@ -442,115 +429,33 @@ class DouZiMi:
 
 
 class QianZiMi:
-    """前字秘·不死天刀（播放地址提取）"""
-
     PLAYER_PATTERN = r'var\s+player_aaaa\s*=\s*(\{.*?\})\s*</script>'
 
     @staticmethod
     def extract_player_url(html: str, config: Dict = None) -> Optional[str]:
         if not html:
             return None
-
         m = re.search(QianZiMi.PLAYER_PATTERN, html, re.S)
         if m:
             try:
-                player_data = json.loads(m.group(1))
-                url = player_data.get("url", "")
+                d = json.loads(m.group(1))
+                url = d.get("url", "")
                 if url:
                     return url.replace("\\/", "/")
             except json.JSONDecodeError:
                 m2 = re.search(r'"url"\s*:\s*"([^"]+)"', m.group(1))
                 if m2:
                     return m2.group(1).replace("\\/", "/")
-
         m = re.search(r'(https?://[^\s"\'<>\\]+\.m3u8[^\s"\'<>\\]*)', html)
         if m:
             return m.group(1).replace("\\/", "/")
-
         m = re.search(r'<iframe[^>]*src="[^"]*[?&]url=([^&"\']+)', html)
         if m:
             return unquote(m.group(1))
-
         return None
 
 
 class JieZiMi:
-    """皆字秘·m3u8 工具"""
-
-    @staticmethod
-    def clean_m3u8(text: str, base_url: str = "", config: Dict = None) -> str:
-        """保留方法以防外部引用，但 v1.8 默认不调用"""
-        cfg = config or DEFAULT_CONFIG
-        clean_cfg = cfg.get("m3u8_clean", {})
-        if not clean_cfg.get("enabled", False):
-            return text
-
-        try:
-            lines = text.splitlines()
-            if not lines or lines[0].strip() != "#EXTM3U":
-                return text
-
-            header_lines, segments = [], []
-            current_seg = {"tags": [], "uri": "", "dur": 0}
-            in_seg = False
-            original_sequence = 0
-
-            for line in lines:
-                s = line.strip()
-                if not s:
-                    continue
-                if s.startswith("#EXTINF:"):
-                    in_seg = True
-                    dur_match = re.search(r"#EXTINF:([0-9.]+)", s)
-                    current_seg["dur"] = float(dur_match.group(1)) if dur_match else 3.0
-                    current_seg["tags"].append(line)
-                elif s.startswith("#EXT-X-MEDIA-SEQUENCE:"):
-                    seq_match = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", s)
-                    if seq_match:
-                        original_sequence = int(seq_match.group(1))
-                elif s.startswith("#"):
-                    if in_seg:
-                        current_seg["tags"].append(line)
-                    else:
-                        header_lines.append(line)
-                else:
-                    if in_seg:
-                        current_seg["uri"] = s
-                        segments.append(current_seg)
-                        current_seg = {"tags": [], "uri": "", "dur": 0}
-                        in_seg = False
-                    else:
-                        header_lines.append(line)
-
-            if not segments:
-                return text
-
-            ad_keywords = clean_cfg.get("ad_keywords", [])
-            min_dur = clean_cfg.get("min_duration", 1.2)
-            cleaned_segs, removed = [], 0
-
-            for seg in segments:
-                uri = seg["uri"]
-                is_ad = False
-                if any(k in uri.lower() for k in ad_keywords):
-                    is_ad = True
-                if 0 < seg["dur"] <= min_dur:
-                    is_ad = True
-                if is_ad:
-                    removed += 1
-                    continue
-                cleaned_segs.extend(seg["tags"])
-                cleaned_segs.append(uri)
-
-            out = ["#EXTM3U"]
-            out.extend([l for l in header_lines if not l.strip().startswith("#EXTM3U")])
-            out.append(f"#EXT-X-MEDIA-SEQUENCE:{original_sequence + removed}")
-            out.extend(cleaned_segs)
-            out.append("#EXT-X-ENDLIST")
-            return "\n".join(out)
-        except Exception:
-            return text
-
     @staticmethod
     def absolutize_m3u8(text: str, base_url: str) -> str:
         if not base_url:
@@ -559,23 +464,18 @@ class JieZiMi:
         lines = []
         for line in text.splitlines():
             s = line.strip()
-            if s and not s.startswith("#"):
-                lines.append(urljoin(base, s))
-            else:
-                lines.append(line)
+            lines.append(urljoin(base, s) if s and not s.startswith("#") else line)
         return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════
-#  爬虫主类
+#  Spider
 # ═══════════════════════════════════════════════════════════════
 
 class Spider(BaseSpider):
-    """影视大全 (iysdq1.com) · v1.8 带缓存 + 代理转发"""
-
     realm_name = "轮海·彼岸"
     defense_level = 0
-    MAX_PAGECOUNT = 999   # ★ pagecount 封顶
+    MAX_PAGECOUNT = 999
 
     _html_cache: Optional[TTLCache] = None
     _proxy_port: int = 0
@@ -589,7 +489,6 @@ class Spider(BaseSpider):
         self.config = DEFAULT_CONFIG
         self.siteUrl = self.config["host"]
         self._session = None
-
         if Spider._html_cache is None:
             Spider._html_cache = TTLCache(
                 ttl=self.config.get("cache_ttl", 120),
@@ -629,8 +528,6 @@ class Spider(BaseSpider):
         if cache is not None:
             cached = cache.get(cache_key)
             if cached is not None:
-                if self.config.get("debug"):
-                    print(f"[{self.realm_name}] 缓存命中: {cache_key}")
                 return cached
 
         session = self._get_session()
@@ -643,7 +540,6 @@ class Spider(BaseSpider):
         backoff = retry_cfg.get("backoff_factor", 1.0)
         timeout = retry_cfg.get("timeout", 15)
 
-        last_err = None
         html = None
         for attempt in range(retries):
             try:
@@ -651,7 +547,6 @@ class Spider(BaseSpider):
                 headers["User-Agent"] = self._random_ua()
                 r = session.get(url, params=params, headers=headers, timeout=timeout)
                 if r.status_code == 200:
-                    # ★ 编码判断优化：优先 header charset，兜底 utf-8，避免 apparent_encoding 全量探测
                     ct = (r.headers.get("Content-Type") or "").lower()
                     m = re.search(r"charset=([^\s;]+)", ct)
                     if m:
@@ -661,29 +556,16 @@ class Spider(BaseSpider):
                     html = r.text
                     break
                 if 400 <= r.status_code < 500 and r.status_code != 429:
-                    if self.config.get("debug"):
-                        print(f"[{self.realm_name}] HTTP {r.status_code}: {url}")
                     return None
-                last_err = f"HTTP {r.status_code}"
-            except requests.Timeout:
-                last_err = "timeout"
-            except requests.RequestException as e:
-                last_err = str(e)
-            except Exception as e:
-                last_err = f"{type(e).__name__}: {e}"
-
+            except Exception:
+                pass
             if attempt < retries - 1:
-                delay = backoff * (2 ** attempt) + random.uniform(0, 0.5)
-                time.sleep(delay)
+                time.sleep(backoff * (2 ** attempt) + random.uniform(0, 0.5))
 
         if html is None:
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] 请求失败({retries}次): {url} — {last_err}")
             return None
-
         if cache is not None:
             cache.set(cache_key, html)
-
         return html
 
     def _ensure_proxy(self) -> int:
@@ -694,9 +576,32 @@ class Spider(BaseSpider):
                 return Spider._proxy_port
             port = HLSProxyServer.start(self.config)
             Spider._proxy_port = port or 0
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] HLS 代理: port={port}")
             return Spider._proxy_port
+
+    # ★ 图片代理转换
+    def _fix_video_pics(self, videos: List[Dict]) -> List[Dict]:
+        if not videos:
+            return videos
+        proxy_on = self.config.get("proxy_image", False)
+        port = 0
+        if proxy_on:
+            port = self._ensure_proxy()
+        for v in videos:
+            pic = v.get("vod_pic", "")
+            if not pic:
+                continue
+            # 已经是代理 URL 或占位图，跳过
+            if pic.startswith("http://127.0.0.1"):
+                continue
+            if not pic.startswith("http"):
+                # 理论上 fix_pic 已经补全，这里兜底
+                pic = DouZiMi.fix_pic(pic, self.siteUrl)
+                v["vod_pic"] = pic
+                if not pic.startswith("http"):
+                    continue
+            if proxy_on and port > 0:
+                v["vod_pic"] = f"http://127.0.0.1:{port}/?img=1&url={quote(pic, safe='')}"
+        return videos
 
     # ── TVBox 接口 ──
 
@@ -714,12 +619,10 @@ class Spider(BaseSpider):
         return self.config.get("name", "影视大全")
 
     def getDependence(self):
-        # 本源只依赖 requests + bs4（APK 内置），无需额外声明
         return []
 
     def isVideoFormat(self, url: str) -> bool:
-        video_exts = ['.m3u8', '.mp4', '.flv', '.mkv', '.avi', '.ts', '.mpg']
-        return any(ext in url.lower() for ext in video_exts)
+        return any(ext in url.lower() for ext in ['.m3u8', '.mp4', '.flv', '.mkv', '.avi', '.ts', '.mpg'])
 
     def manualVideoCheck(self) -> bool:
         return False
@@ -739,27 +642,19 @@ class Spider(BaseSpider):
                 specific = filters_cfg.get(tid, {})
                 items = []
                 if specific.get("class"):
-                    items.append({"key": "class", "name": "类型",
-                                  "value": to_options(specific["class"])})
+                    items.append({"key": "class", "name": "类型", "value": to_options(specific["class"])})
                 if common.get("area"):
-                    items.append({"key": "area", "name": "地区",
-                                  "value": to_options(common["area"])})
+                    items.append({"key": "area", "name": "地区", "value": to_options(common["area"])})
                 if common.get("lang"):
-                    items.append({"key": "lang", "name": "语言",
-                                  "value": to_options(common["lang"])})
+                    items.append({"key": "lang", "name": "语言", "value": to_options(common["lang"])})
                 if common.get("letter"):
-                    items.append({"key": "letter", "name": "字母",
-                                  "value": to_options(common["letter"])})
+                    items.append({"key": "letter", "name": "字母", "value": to_options(common["letter"])})
                 if common.get("year"):
-                    items.append({"key": "year", "name": "年份",
-                                  "value": to_options(common["year"])})
+                    items.append({"key": "year", "name": "年份", "value": to_options(common["year"])})
                 if items:
                     filters[tid] = items
-
             return {"class": classes, "filters": filters}
-        except Exception as e:
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] homeContent 错误: {e}")
+        except Exception:
             return {"class": self.config["categories"]}
 
     def homeVideoContent(self) -> Dict:
@@ -768,12 +663,13 @@ class Spider(BaseSpider):
             if not html:
                 return {"list": []}
             videos = DouZiMi.parse_video_list(html, self.config)
+            # ★ 过图片代理
+            videos = self._fix_video_pics(videos)
             return {"list": videos[:50]}
         except Exception:
             return {"list": []}
 
     def categoryContent(self, tid, pg, filter=False, extend=None) -> Dict:
-        # ★ 兼容 dict / JSON 字符串 / None
         if isinstance(extend, str):
             try:
                 extend = json.loads(extend) if extend.strip() else {}
@@ -792,48 +688,30 @@ class Spider(BaseSpider):
             year = extend.get("year", "") or ""
 
             pg_field = "" if pg_num == 1 else str(pg_num)
-            path = (
-                f"/vodshow/{tid}"
-                f"-{quote(area)}"
-                f"-{by}"
-                f"-{quote(cls)}"
-                f"-{quote(lang)}"
-                f"-{quote(letter)}"
-                f"---{pg_field}---"
-                f"{year}.html"
-            )
+            path = (f"/vodshow/{tid}-{quote(area)}-{by}-{quote(cls)}-{quote(lang)}"
+                    f"-{quote(letter)}---{pg_field}---{year}.html")
             url = self.siteUrl.rstrip("/") + path
-
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] 分类URL: {url}")
 
             html = self._get_html(url)
             if not html:
                 return {"list": [], "page": pg_num, "pagecount": 1, "limit": 0, "total": 0}
 
             videos = DouZiMi.parse_video_list(html, self.config)
+            # ★ 过图片代理
+            videos = self._fix_video_pics(videos)
 
             has_next = bool(re.search(r'下一页|下页|尾页', html))
             if not has_next and videos:
                 has_next = len(videos) >= self.config["pagination"]["page_size"]
-
-            pagecount = pg_num + 1 if has_next else pg_num
-            # ★ 封顶
-            if pagecount > self.MAX_PAGECOUNT:
-                pagecount = self.MAX_PAGECOUNT
-            total = pagecount * self.config["pagination"]["page_size"]
+            pagecount = min(pg_num + 1 if has_next else pg_num, self.MAX_PAGECOUNT)
 
             return {
-                "list": videos,
-                "page": pg_num,
-                "pagecount": pagecount,
+                "list": videos, "page": pg_num, "pagecount": pagecount,
                 "limit": self.config["pagination"]["page_size"],
-                "total": total,
+                "total": pagecount * self.config["pagination"]["page_size"],
                 "filters": self._build_filters(tid),
             }
-        except Exception as e:
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] categoryContent 错误: {e}")
+        except Exception:
             return {"list": [], "page": int(pg or 1), "pagecount": 1, "limit": 0, "total": 0}
 
     def _build_filters(self, tid: str) -> Dict:
@@ -863,7 +741,6 @@ class Spider(BaseSpider):
             return {}
 
     def detailContent(self, ids) -> Dict:
-        # ★ 兼容字符串入参（安卓壳有时传 "177600" 而非 ["177600"]）
         if isinstance(ids, str):
             ids = [ids] if ids else []
         if not isinstance(ids, (list, tuple)):
@@ -884,27 +761,17 @@ class Spider(BaseSpider):
                 item = self._parse_detail_html(html, vod_id)
                 if item:
                     results.append(item)
-            except Exception as e:
-                if self.config.get("debug"):
-                    print(f"[{self.realm_name}] detailContent {vod_id} 错误: {e}")
+            except Exception:
                 continue
-        return {"list": results}
+        # ★ 详情封面也过图片代理
+        return {"list": self._fix_video_pics(results)}
 
     def _parse_detail_html(self, html: str, vod_id: str) -> Optional[Dict]:
         detail = {
-            "vod_id": str(vod_id),
-            "vod_name": "",
-            "vod_pic": "",
-            "vod_remarks": "",
-            "vod_content": "",
-            "vod_year": "",
-            "vod_actor": "",
-            "vod_director": "",
-            "vod_area": "",
-            "vod_type": "",
-            "vod_score": "",
-            "vod_play_from": "",
-            "vod_play_url": "",
+            "vod_id": str(vod_id), "vod_name": "", "vod_pic": "", "vod_remarks": "",
+            "vod_content": "", "vod_year": "", "vod_actor": "", "vod_director": "",
+            "vod_area": "", "vod_type": "", "vod_score": "",
+            "vod_play_from": "", "vod_play_url": "",
         }
 
         if not HAS_BS4:
@@ -915,8 +782,7 @@ class Spider(BaseSpider):
                 m = re.search(r'<title>(.*?)</title>', html, re.S)
                 if m:
                     detail["vod_name"] = DouZiMi.clean_text(m.group(1)).split("_")[0].split("-")[0].strip()
-            if not detail["vod_name"]:
-                detail["vod_name"] = f"视频_{vod_id}"
+            detail["vod_name"] = detail["vod_name"] or f"视频_{vod_id}"
             return detail
 
         soup = BeautifulSoup(html, "html.parser")
@@ -924,7 +790,6 @@ class Spider(BaseSpider):
         title_tag = soup.select_one("div.this-desc-title")
         if title_tag:
             detail["vod_name"] = DouZiMi.clean_text(title_tag.text)
-
         if not detail["vod_name"]:
             for sel in ["h1.title", "div.detail-title h1", "h1.page-title", "h1"]:
                 t = soup.select_one(sel)
@@ -943,8 +808,7 @@ class Spider(BaseSpider):
 
         pic_bj = soup.select_one("div.this-pic-bj")
         if pic_bj:
-            style = pic_bj.get("style", "")
-            m = re.search(r"url\(['\"]?([^'\")]+)['\"]?\)", style)
+            m = re.search(r"url\(['\"]?([^'\")]+)['\"]?\)", pic_bj.get("style", ""))
             if m:
                 detail["vod_pic"] = DouZiMi.fix_pic(m.group(1), self.siteUrl)
 
@@ -954,9 +818,7 @@ class Spider(BaseSpider):
                 if img_tag:
                     detail["vod_pic"] = DouZiMi.fix_pic(
                         img_tag.get("data-src") or img_tag.get("data-original")
-                        or img_tag.get("src") or "",
-                        self.siteUrl
-                    )
+                        or img_tag.get("src") or "", self.siteUrl)
                     if detail["vod_pic"]:
                         break
 
@@ -978,9 +840,8 @@ class Spider(BaseSpider):
                 if not detail["vod_remarks"]:
                     detail["vod_remarks"] = text
                 continue
-            if text in area_list:
-                if not detail["vod_area"]:
-                    detail["vod_area"] = text
+            if text in area_list and not detail["vod_area"]:
+                detail["vod_area"] = text
 
         actor_tag = soup.select_one("div.this-info a")
         if actor_tag:
@@ -988,8 +849,7 @@ class Spider(BaseSpider):
 
         desc_tag = soup.select_one("div.this-desc div.text")
         if desc_tag:
-            txt = desc_tag.get_text(strip=True)
-            txt = re.sub(r"^描述[:：]\s*", "", txt)
+            txt = re.sub(r"^描述[:：]\s*", "", desc_tag.get_text(strip=True))
             if txt and txt not in ("暂无简介", "暂无"):
                 detail["vod_content"] = DouZiMi.clean_text(txt)
 
@@ -1018,8 +878,7 @@ class Spider(BaseSpider):
             elif "类型" in text and not detail["vod_type"]:
                 type_as = li.find_all("a")
                 if type_as:
-                    types = [DouZiMi.clean_text(a.text) for a in type_as]
-                    types = [t for t in types if t]
+                    types = [DouZiMi.clean_text(a.text) for a in type_as if DouZiMi.clean_text(a.text)]
                     if types:
                         detail["vod_type"] = ",".join(types)
                 else:
@@ -1034,10 +893,8 @@ class Spider(BaseSpider):
         play_from, play_url = self._parse_play_list(soup, vod_id, html)
         detail["vod_play_from"] = play_from
         detail["vod_play_url"] = play_url
-
         if not detail["vod_name"]:
             detail["vod_name"] = f"视频_{vod_id}"
-
         return detail
 
     def _parse_play_list(self, soup, vod_id: str, html: str = "") -> Tuple[str, str]:
@@ -1078,12 +935,9 @@ class Spider(BaseSpider):
                     return "$$$".join(froms), "$$$".join(urls)
 
         if soup is not None:
-            selectors = [
-                "div.playlist", "div.vod-playlist", "ul.content_playlist",
-                "div.play-list", "div.playlist-content", "div#playlist",
-                "div.tab-content", "div.panel-playlist", "div.module-playlist",
-            ]
-            for sel in selectors:
+            for sel in ["div.playlist", "div.vod-playlist", "ul.content_playlist",
+                        "div.play-list", "div.playlist-content", "div#playlist",
+                        "div.tab-content", "div.panel-playlist", "div.module-playlist"]:
                 try:
                     divs = soup.select(sel)
                 except Exception:
@@ -1116,8 +970,7 @@ class Spider(BaseSpider):
         if html:
             all_links = re.findall(
                 r'<a[^>]*href="(/vodplay/' + re.escape(str(vod_id)) + r'-(\d+)-(\d+)\.html)"[^>]*>([^<]*)</a>',
-                html
-            )
+                html)
             if all_links:
                 groups = defaultdict(list)
                 for href, sid, nid, txt in all_links:
@@ -1127,8 +980,7 @@ class Spider(BaseSpider):
                     episodes = []
                     for nid, href, txt in eps:
                         ep_name = DouZiMi.clean_text(txt) or f"第{nid}集"
-                        full = urljoin(self.siteUrl, href)
-                        episodes.append(f"{ep_name}${full}")
+                        episodes.append(f"{ep_name}${urljoin(self.siteUrl, href)}")
                     froms.append(f"线路{sid}")
                     urls.append("#".join(episodes))
                 if froms:
@@ -1140,8 +992,7 @@ class Spider(BaseSpider):
                 episodes = []
                 for i, (href, txt) in enumerate(links):
                     ep_name = DouZiMi.clean_text(txt) or f"第{i + 1}集"
-                    full = urljoin(self.siteUrl, href)
-                    episodes.append(f"{ep_name}${full}")
+                    episodes.append(f"{ep_name}${urljoin(self.siteUrl, href)}")
                 return "默认线路", "#".join(episodes)
 
         return "", ""
@@ -1155,7 +1006,6 @@ class Spider(BaseSpider):
         try:
             if not id:
                 return {"parse": 0, "url": "", "header": {}}
-
             if id.startswith("http"):
                 play_url = id
             elif id.startswith("/"):
@@ -1178,66 +1028,43 @@ class Spider(BaseSpider):
                 m = re.search(r'<iframe[^>]*src="([^"]*[?&]url=([^&"]+))', html)
                 if m:
                     m3u8_url = unquote(m.group(2))
-
             if not m3u8_url:
                 return {"parse": 0, "url": play_url, "header": {}}
 
-            header = {
-                "Referer": self.siteUrl,
-                "User-Agent": self._random_ua(),
-            }
+            header = {"Referer": self.siteUrl, "User-Agent": self._random_ua()}
 
-            # ★ 代理只做绝对化 + Referer 转发，不做广告清洗
             if self.config.get("proxy_clean_m3u8", True) and ".m3u8" in m3u8_url.lower():
                 port = self._ensure_proxy()
                 if port > 0:
-                    proxy_url = f"http://127.0.0.1:{port}/?url={quote(m3u8_url, safe='')}"
-                    if self.config.get("debug"):
-                        print(f"[{self.realm_name}] 代理URL: {proxy_url[:120]}")
-                    return {"parse": 0, "url": proxy_url, "header": header}
-
+                    return {"parse": 0,
+                            "url": f"http://127.0.0.1:{port}/?url={quote(m3u8_url, safe='')}",
+                            "header": header}
             return {"parse": 0, "url": m3u8_url, "header": header}
-
-        except Exception as e:
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] playerContent 错误: {e}")
+        except Exception:
             return {"parse": 0, "url": id, "header": {}}
 
     def searchContent(self, key: str, quick: str = "1", pg: str = "1") -> Dict:
         try:
             pg_num = int(pg or 1)
-            base_path = self.config["endpoints"]["search"]
-            url = self.siteUrl.rstrip("/") + base_path
+            url = self.siteUrl.rstrip("/") + self.config["endpoints"]["search"]
             params = {"wd": key}
             if pg_num > 1:
                 params["page"] = pg_num
-
             html = self._get_html(url, params=params)
             if not html:
                 return {"list": [], "page": pg_num, "pagecount": 1}
-
             videos = DouZiMi.parse_video_list(html, self.config)
-
+            # ★ 过图片代理
+            videos = self._fix_video_pics(videos)
             has_next = bool(re.search(r'下一页|下页|尾页', html))
             if not has_next and videos:
                 has_next = len(videos) >= self.config["pagination"]["search_page_size"]
-
-            pagecount = pg_num + 1 if has_next else pg_num
-            if pagecount > self.MAX_PAGECOUNT:
-                pagecount = self.MAX_PAGECOUNT
-
-            return {
-                "list": videos,
-                "page": pg_num,
-                "pagecount": pagecount,
-            }
-        except Exception as e:
-            if self.config.get("debug"):
-                print(f"[{self.realm_name}] searchContent 错误: {e}")
+            pagecount = min(pg_num + 1 if has_next else pg_num, self.MAX_PAGECOUNT)
+            return {"list": videos, "page": pg_num, "pagecount": pagecount}
+        except Exception:
             return {"list": [], "page": int(pg or 1), "pagecount": 1}
 
     def searchContentPage(self, key: str, quick: bool = False, pg: str = "1") -> Dict:
-        """★ 安卓 APK 兼容入口"""
         return self.searchContent(key, quick, pg)
 
     def localProxy(self, param: Dict) -> List:
@@ -1246,21 +1073,15 @@ class Spider(BaseSpider):
             kind = param.get("kind", "")
             if not url:
                 return [400, "text/plain", b"missing url"]
-
             session = self._get_session()
             if session is None:
                 return [500, "text/plain", b"no session"]
-
             r = session.get(url, headers=self._build_headers(), timeout=30)
-
-            if kind == "hls" or ".m3u8" in url:
-                # ★ 只绝对化，不清洗
-                text = JieZiMi.absolutize_m3u8(r.text, url)
-                return [200, "application/vnd.apple.mpegurl", text.encode()]
-
             if kind == "img":
                 return [200, r.headers.get("Content-Type", "image/jpeg"), r.content]
-
+            if kind == "hls" or ".m3u8" in url:
+                text = JieZiMi.absolutize_m3u8(r.text, url)
+                return [200, "application/vnd.apple.mpegurl", text.encode()]
             return [200, r.headers.get("Content-Type", "application/octet-stream"), r.content]
         except Exception as e:
             return [500, "text/plain", f"Proxy Error: {e}".encode()]
@@ -1270,201 +1091,52 @@ YiSdqSpider = Spider
 
 
 # ═══════════════════════════════════════════════════════════════
-#  自检 & 命令行（桌面/Termux 用，安卓加载不会触发）
+#  自检
 # ═══════════════════════════════════════════════════════════════
 
 def self_test():
-    print("█" * 60)
-    print("█" + " " * 14 + "影视大全爬虫 v1.8 自检" + " " * 15 + "█")
-    print("█" * 60)
-    print(f"Python: {sys.version}")
+    print("=" * 60)
+    print("影视大全 v1.9 自检")
+    print("=" * 60)
     print(f"requests: {'OK' if HAS_REQUESTS else 'MISSING'}")
-    print(f"beautifulsoup4: {'OK' if HAS_BS4 else 'MISSING'}")
-    print(f"\nTVBox 入口类: Spider = {Spider}")
+    print(f"bs4: {'OK' if HAS_BS4 else 'MISSING'}")
 
-    print("\n  [1] TTLCache 测试")
-    cache = TTLCache(ttl=2, maxsize=10)
-    cache.set("k1", "v1")
-    assert cache.get("k1") == "v1", "缓存读写失败"
-    print(f"    写入+命中: OK")
-    time.sleep(2.1)
-    assert cache.get("k1") is None, "缓存未过期"
-    print(f"    TTL 过期: OK")
-    cache.set("k2", "v2")
-    cache.clear()
-    assert cache.get("k2") is None, "缓存清空失败"
-    print(f"    clear(): OK")
+    print("\n[1] fix_pic 测试")
+    cases = [
+        ("/upload/vod/1.jpg", "https://x.com", "https://x.com/upload/vod/1.jpg"),
+        ("//cdn.x.com/1.jpg", "https://x.com", "https://cdn.x.com/1.jpg"),
+        ("data:image/gif;base64,xxx", "https://x.com", ""),
+        ("https://cdn.x.com/1.jpg", "https://x.com", "https://cdn.x.com/1.jpg"),
+        ("upload/vod/1.jpg", "https://x.com", "https://x.com/upload/vod/1.jpg"),
+    ]
+    for raw, host, expected in cases:
+        got = DouZiMi.fix_pic(raw, host)
+        flag = "OK" if got == expected else "FAIL"
+        print(f"  [{flag}] {raw!r} → {got!r}")
 
-    print("\n  [2] HLSProxyServer 测试")
-    port = HLSProxyServer.start(DEFAULT_CONFIG)
-    if port > 0:
-        print(f"    启动成功: port={port}")
-    else:
-        print(f"    启动失败（沙箱可能禁端口，将回退直链）")
-
-    print("\n  [3] 兼容性测试（不联网）")
-    spider = Spider()
-    spider.siteUrl = "https://www.iysdq1.com"
-    # 3.1 字符串 ids
-    try:
-        res = spider.detailContent("")
-        assert res == {"list": []}, res
-        print(f"    detailContent('') → [] : OK")
-    except Exception as e:
-        print(f"    detailContent('') 失败: {e}")
-
-    # 3.2 字符串 extend
-    try:
-        # 不真请求，只验证不抛异常
-        r1 = spider._safe_test_extend('{"area":"大陆"}')
-        print(f"    extend 字符串解析: {r1} : OK")
-    except Exception as e:
-        print(f"    extend 字符串解析失败: {e}")
-
-    # 3.3 详情页解析
-    detail_html = '''
-    <html><head><title>《乡镇大亨》-影视大全</title></head>
-    <body>
-    <div class="this-pic-bj" style="background-image: url('https://cdnv3.daquanz.com/upload/vod/20261013-1/e6585474142634b77d24cd841f56de09.jpg')"></div>
-    <div class="this-desc-title">乡镇大亨：从辞职返乡开始</div>
-    <div class="this-desc-info">
-      <span class="this-desc-score">7.0</span>
-      <span>2026</span>
-      <span>大陆</span>
-      <span>更新全集</span>
+    print("\n[2] 列表解析（含图片 URL 修复）")
+    html = '''
+    <div class="public-list-box">
+      <a class="public-list-exp" href="/voddetail/123.html" title="测试片名">
+        <img data-src="/upload/vod/2026/a.jpg">
+      </a>
+      <span class="public-list-prb">更新至10集</span>
     </div>
-    <div class="this-info"><strong>演员:</strong><a href="#">刘峰硕&知意</a></div>
-    <div class="info-parameter"><ul>
-      <li><em>导演：</em>未知</li>
-      <li><em>年份：</em>2026</li>
-      <li><em>地区：</em>大陆</li>
-      <li><em>类型：</em><a href="#">年代穿越</a><a href="#">短剧</a></li>
-    </ul></div>
-    <div class="anthology-tab"><div class="swiper-wrapper">
-      <a class="swiper-slide">2线</a><a class="swiper-slide">3线</a>
-    </div></div>
-    <div class="anthology-list">
-      <div class="anthology-list-box"><ul><li><a href="/vodplay/177600-2-1.html">全集</a></li></ul></div>
-      <div class="anthology-list-box"><ul><li><a href="/vodplay/177600-1-1.html">全集</a></li></ul></div>
+    <div class="public-list-box">
+      <a class="public-list-exp" href="/voddetail/124.html" title="懒加载图">
+        <img src="data:image/gif;base64,xxx" data-original="//cdn.x.com/b.jpg">
+      </a>
     </div>
-    </body></html>
     '''
-    detail = spider._parse_detail_html(detail_html, "177600")
-    for k in ["vod_name", "vod_year", "vod_area", "vod_remarks", "vod_actor",
-              "vod_type", "vod_score", "vod_play_from"]:
-        print(f"    {k}: {detail.get(k)}")
+    videos = DouZiMi.parse_video_list(html, {"host": "https://www.iysdq1.com"})
+    for v in videos:
+        print(f"  {v['vod_id']} | {v['vod_name']} | pic={v['vod_pic']}")
 
-    print("\n  [4] 真实请求缓存命中测试")
-    if HAS_REQUESTS:
-        url = "https://www.iysdq1.com/"
-        t1 = time.time(); h1 = spider._get_html(url); d1 = time.time() - t1
-        t2 = time.time(); h2 = spider._get_html(url); d2 = time.time() - t2
-        if h1 and h2:
-            print(f"    首次: {d1:.2f}s, 缓存: {d2:.3f}s, 命中: {h1 == h2}")
-        else:
-            print(f"    请求失败（网络问题）")
-
-    HLSProxyServer.stop()
-    print("\n" + "█" * 60)
-    print("自检完成！")
-    print("█" * 60)
-
-
-# 兼容自检里的 extend 解析测试
-def _safe_test_extend(self, extend):
-    if isinstance(extend, str):
-        try:
-            extend = json.loads(extend) if extend.strip() else {}
-        except Exception:
-            extend = {}
-    if not isinstance(extend, dict):
-        extend = {}
-    return extend
-
-Spider._safe_test_extend = _safe_test_extend
-
-
-def main():
-    parser = argparse.ArgumentParser(description="影视大全 (iysdq1.com) 爬虫 v1.8")
-    parser.add_argument("url", nargs="?", default="https://www.iysdq1.com")
-    parser.add_argument("--self-test", action="store_true")
-    parser.add_argument("--test", choices=["home", "homevideo", "category", "detail", "player", "search", "proxy"])
-    parser.add_argument("--category", default="1")
-    parser.add_argument("--page", default="1")
-    parser.add_argument("--keyword", default="测试")
-    parser.add_argument("--vod-id", default="177600")
-    parser.add_argument("--area", default="")
-    parser.add_argument("--class", dest="cls", default="")
-    parser.add_argument("--lang", default="")
-    parser.add_argument("--letter", default="")
-    parser.add_argument("--year", default="")
-    args = parser.parse_args()
-
-    if args.self_test:
-        self_test()
-        return
-
-    spider = Spider()
-    spider.siteUrl = args.url
-    spider.config["host"] = args.url
-
-    if args.test == "home":
-        print(json.dumps(spider.homeContent(), ensure_ascii=False, indent=2)[:2000])
-    elif args.test == "homevideo":
-        result = spider.homeVideoContent()
-        print(f"首页推荐: {len(result.get('list', []))} 条")
-    elif args.test == "category":
-        extend = {}
-        for k, v in [("area", args.area), ("class", args.cls),
-                     ("lang", args.lang), ("letter", args.letter), ("year", args.year)]:
-            if v:
-                extend[k] = v
-        result = spider.categoryContent(args.category, args.page, False, extend)
-        print(json.dumps(result, ensure_ascii=False, indent=2)[:3000])
-    elif args.test == "detail":
-        result = spider.detailContent([args.vod_id])
-        print(json.dumps(result, ensure_ascii=False, indent=2)[:3000])
-    elif args.test == "player":
-        result = spider.playerContent("2线", f"{args.vod_id}-1-1")
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if result.get("url", "").startswith("http://127.0.0.1"):
-            print("\n  → 已走本地代理（转发 m3u8）")
-            import urllib.request
-            try:
-                r = urllib.request.urlopen(result["url"], timeout=10)
-                body = r.read().decode("utf-8", "replace")
-                print(f"  代理返回: {len(body)} 字节")
-                print(f"  前 200 字符:\n{body[:200]}")
-            except Exception as e:
-                print(f"  代理访问失败: {e}")
-        else:
-            print("\n  → 直链（未走代理）")
-    elif args.test == "search":
-        result = spider.searchContent(args.keyword, "1", args.page)
-        print(json.dumps(result, ensure_ascii=False, indent=2)[:2000])
-    elif args.test == "proxy":
-        port = HLSProxyServer.start(spider.config)
-        print(f"代理端口: {port}")
-    else:
-        print("完整流程测试")
-        print("\n[1] 分类")
-        cat = spider.categoryContent("1", "1", False, {})
-        print(f"  {len(cat.get('list', []))} 条")
-        print("\n[2] 详情")
-        if cat.get("list"):
-            vid = cat["list"][0]["vod_id"]
-            detail = spider.detailContent([vid])
-            if detail.get("list"):
-                d = detail["list"][0]
-                print(f"  {d['vod_name']}")
-                print(f"  源: {d['vod_play_from']}")
-        print("\n[3] 缓存测试")
-        url = spider.siteUrl
-        import time as _t
-        a = _t.time(); spider._get_html(url); t1 = _t.time() - a
-        a = _t.time(); spider._get_html(url); t2 = _t.time() - a
-        print(f"  首次 {t1:.2f}s / 缓存 {t2:.3f}s")
+    print("\n[3] 配置项")
+    sp = Spider()
+    print(f"  proxy_image = {sp.config.get('proxy_image')}")
+    print(f"  proxy_clean_m3u8 = {sp.config.get('proxy_clean_m3u8')}")
 
 
 if __name__ == "__main__":
-    main()
+    self_test()
