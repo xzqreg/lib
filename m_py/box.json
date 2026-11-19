@@ -10,12 +10,6 @@
       "filterable": 0
     },
     {
-      "key": "py_yangshipin",
-      "name": "直播[py]",
-      "type": 3,
-      "api": "./yangshipin.py"
-    },
-    {
       "key": "py_4kys",
       "name": "4kys[优].py",
       "type": 3,
@@ -47,15 +41,6 @@
       "name": "闪雷.py",
       "type": 3,
       "api": "./闪雷.py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_SA视频采",
-      "name": "SA视频[采]",
-      "type": 3,
-      "api": "./SA视频[采].py",
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
@@ -97,64 +82,10 @@
       "filterable": 1
     },
     {
-      "key": "py_xianyu采",
-      "name": "xianyu[采]",
-      "type": 3,
-      "api": "./xianyu[采].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_hqvod剧",
-      "name": "hqvod[剧]",
-      "type": 3,
-      "api": "./hqvod[剧].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_剧下饭4K优",
-      "name": "剧下饭4K[优]",
-      "type": 3,
-      "api": "./剧下饭4K[优].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_剧踪ys优",
-      "name": "剧踪ys[优]",
-      "type": 3,
-      "api": "./剧踪ys[优].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
       "key": "py_如意采",
       "name": "如意[采]",
       "type": 3,
       "api": "./如意[采].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_山有木兮优",
-      "name": "山有木兮[优]",
-      "type": 3,
-      "api": "./山有木兮[优].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_布布追剧剧",
-      "name": "布布追剧[剧]",
-      "type": 3,
-      "api": "./布布追剧[剧].py",
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
@@ -196,15 +127,6 @@
       "filterable": 1
     },
     {
-      "key": "py_毒舌剧",
-      "name": "毒舌[剧]",
-      "type": 3,
-      "api": "./毒舌[剧].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
       "key": "py_河豚4K优",
       "name": "河豚4K[优]",
       "type": 3,
@@ -218,15 +140,6 @@
       "name": "热播[剧]",
       "type": 3,
       "api": "./热播[剧].py",
-      "searchable": 1,
-      "quickSearch": 1,
-      "filterable": 1
-    },
-    {
-      "key": "py_独播库优",
-      "name": "独播库[优]",
-      "type": 3,
-      "api": "./独播库[优].py",
       "searchable": 1,
       "quickSearch": 1,
       "filterable": 1
